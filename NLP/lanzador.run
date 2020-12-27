@@ -1,0 +1,217 @@
+# Reset
+reset;
+
+cd '/Users/luisrojo/Desktop/ThesisUPC/NLP';
+
+# Model
+model modelo.mod;
+
+# hyperparameters
+set S := {1 .. 10}; # number of scenarios
+set Sexes := {'Men', 'Women'};
+set Rep := {1 .. 5}; # number of repetitions
+#set experiment := {1 .. 3}; # number of experiments, forward
+set experiment := {4 .. 6}; # number of experiments, backward
+
+# Change the print options
+option display_round 5; # Round option
+option display_width 10000000; # Width of the display
+
+# Change the solver settings
+option solver minos; # solver to use
+option presolve 0; # Disable the presolve
+option minos_options 'Completion = full \
+                      Lagrangian = yes \
+                      Linesearch_tolerance = 0.9 \
+                      Penalty_parameter = 1 \
+                      Radius_of_convergence = 0.001 \
+                      major_iterations = 2000 \
+                      minor_iterations = 50 \
+                      iteration_limit = 2000 \
+                      Feasibility_tolerance = 1.0e-6 \
+                      Unbounded_objective_value = 1.0e+20 \
+                      Unbounded_step_size = 1.0e+20';
+
+# loop within sexes
+for {q in Sexes}{
+
+  # Set the random seed, 0 indicates clock seed
+  option randseed 12345;
+
+  # make a folder for each sex
+  shell ('mkdir /Users/luisrojo/Desktop/ThesisUPC/NLP/' & q);
+
+  for {ex in experiment}{
+    # make a folder for each experiment
+    shell ('mkdir /Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex);
+
+    # repetitions, repeat the solver several times with different random seeds each
+    for {repe in Rep}{
+
+      # loop within scenarios
+      for {s in S}{
+        # data
+        reset data;
+
+        cd '/Users/luisrojo/Desktop/ThesisUPC/NLP';
+        # Data
+        data control.dat;
+
+        #let n_ens := 3;
+
+        # compute the starting time
+        let t0 := _ampl_elapsed_time+_total_solve_elapsed_time;
+
+        # -------- Reading Parameters --------
+        # Change the directory to read the data
+        # Change the directory to read the data
+        cd ('/Users/luisrojo/Desktop/ThesisUPC/Data/' & q);
+
+        # populations
+        read {i in bmi, j in age} pop[i,j,1] < ('Population_clean_2003.txt');
+        close ('Population_clean_2003.txt');
+        read {i in bmi, j in age} pop[i,j,2] < ('Population_clean_2010.txt');
+        close ('Population_clean_2010.txt');
+        read {i in bmi, j in age} pop[i,j,3] < ('Population_clean_2017.txt');
+        close ('Population_clean_2017.txt');
+
+        # get the time period
+        #let y0 := grid[ex,4];
+        #let y1 := grid[ex,5];
+
+        # change the set when it is a backward experiment
+        #if (y0 > y1) then redeclare set year := {22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1} ordered;
+
+        # get the order of the population to pull
+        let ord_year_init := grid[ex,6];
+        let ord_year_obj := grid[ex,7];
+        let ord_ens_init := grid[ex,8];
+        let ord_ens_obj := grid[ex,9];
+
+        # initial population (known)
+        let {(i,j,d) in {bmi,age,ens}: ord(d) == ord_ens_init} p0[i,j] := pop[i,j,d];
+        # objective population (known)
+        let {(i,j,d) in {bmi,age,ens}: ord(d) == ord_ens_obj} p1[i,j] := pop[i,j,d];
+
+        # Proportion of population at age range boundaries
+        read {j in age, k in year} y[j,k] < ('AgeBoundaryProportion_' & q & '.txt');
+        close ('AgeBoundaryProportion_' & q & '.txt');
+        #display y;
+
+        # Population growth
+        read {i in bmi, j in age} m[i,j] < ('PopulationGrowth_' & q & '_' & grid[ex,1] & '_' & grid[ex,2] & '.txt');
+        close ('PopulationGrowth_' & q & '_' & grid[ex,1] & '_' & grid[ex,2] & '.txt');
+        #display m;
+
+        # Age range weights
+        read {j in age} w[j] < ('Populationweight_' & q & '_' & grid[ex,2] & '.txt');
+        close ('Populationweight_' & q & '_' & grid[ex,2] & '.txt');
+        #display w;
+
+        # Change the directory to read the data
+        cd ('/Users/luisrojo/Desktop/ThesisUPC/Data/' & q & '/Scenarios');
+
+        # Read different scenarios
+        read {i in bmi, j in age} amin[i,j] < (q & '_' & s & '_li_' & 'a' & '.txt');
+        close (q & '_' & s & '_li_' & 'a' & '.txt');
+        read {i in bmi, j in age} amax[i,j] < (q & '_' & s & '_ls_' & 'a' & '.txt');
+        close (q & '_' & s & '_ls_' & 'a' & '.txt');
+        read {i in bmi, j in age} bmin[i,j] < (q & '_' & s & '_li_' & 'b' & '.txt');
+        close (q & '_' & s & '_li_' & 'b' & '.txt');
+        read {i in bmi, j in age} bmax[i,j] < (q & '_' & s & '_ls_' & 'b' & '.txt');
+        close (q & '_' & s & '_ls_' & 'b' & '.txt');
+        read {i in bmi, j in age} cmin[i,j] < (q & '_' & s & '_li_' & 'c' & '.txt');
+        close (q & '_' & s & '_li_' & 'c' & '.txt');
+        read {i in bmi, j in age} cmax[i,j] < (q & '_' & s & '_ls_' & 'c' & '.txt');
+        close (q & '_' & s & '_ls_' & 'c' & '.txt');
+
+        # Random uniform, feasible, initial numbers for the solver
+        let {(i,j) in {bmi,age}} a[i,j] := Uniform(amin[i,j],amax[i,j]);
+        let {(i,j) in {bmi,age}} b[i,j] := Uniform(bmin[i,j],bmax[i,j]);
+        let {(i,j) in {bmi,age}} c[i,j] := (1-a[i,j]-b[i,j]);
+
+        # Retry to solve those unbounded or infeasible solutions
+        repeat {
+          solve;
+          if solve_result != "failure" and solve_result != "unbounded" then break;
+        };
+
+        # make a folder for each experiment -> Results
+        shell ('mkdir /Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/Results');
+
+        # make a folder for each experiment -> PopulationYear
+        shell ('mkdir /Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/PopulationYear');
+
+        # Change the directory to read the data
+        cd ('/Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/Results');
+
+        # Print the kind of the solution, e.g., optimal or stop criteria
+        print solve_result > KindSolution.txt;
+
+        # Avoid to printing results when the solution is not optimal or infeasible
+        #if solve_result == "limit" or solve_result == "infeasible" then continue;
+        if solve_result == "infeasible" then continue;
+
+        # Indicates the solver status, i.e., whether the solution was achieved
+        # See pp. 9, chapter 17 - AMPL book
+        display solve_result_num, solve_result;
+
+        # Print the solution for the transition probabilities
+        #display a,b,c;
+        display a,b,c > trend.txt;
+
+        # Print the objective function
+        print z > ObjectiveFunction.txt;
+
+        # Print the transition probabilities in between age ranges
+        display BETA_DIS,BETA_MAN,BETA_AUM > BETA.txt;
+        display GAMA_DIS,GAMA_MAN,GAMA_AUM > GAMMA.txt;
+
+        # Change the directory to read the data
+        cd ('/Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/PopulationYear');
+
+        # Print forecasting populations
+        for{k in year}{
+          display {(i,j) in {bmi,age}} U[i,j,k] > ('Population' & (k+2002) & '.txt');
+        }
+
+        # Print real populations
+        display {(i,j) in {bmi,age}} pop[i,j,1] > Population2003real.txt;
+        display {(i,j) in {bmi,age}} pop[i,j,2] > Population2010real.txt;
+        display {(i,j) in {bmi,age}} pop[i,j,3] > Population2017real.txt;
+
+        # Change the directory to read the data
+        cd ('/Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/Results');
+
+        # Print the running time of the current iteration
+        display (_ampl_elapsed_time+_total_solve_elapsed_time - t0) > Time.txt;
+      } # end scenarios
+    } # end repetitions
+
+    # Close all the conections already open
+    /* close KindSolution.txt;
+    close trend.txt;
+    close ObjectiveFunction.txt;
+    close BETA.txt;
+    close GAMMA.txt;
+    for{k in year}{
+      close ('Population' & (k+2002) & '.txt');
+    } */
+
+    # Change the directory to read the data
+    #cd ('/Users/luisrojo/Desktop/ThesisUPC/NLP/' & q & '/Experiment_' & ex & '/PopulationYear');
+
+    # Close all the conections already open
+    #close Population2003real.txt;
+    #close Population2010real.txt;
+    #close Population2017real.txt;
+    #close Time.txt;
+    close;
+  } # end experiment
+
+  #close;
+} # end sexes
+
+printf "Real Time: %f \n \n", _ampl_elapsed_time+_total_solve_elapsed_time;
+
+cd '/Users/luisrojo/Desktop/ThesisUPC/NLP';
