@@ -1,0 +1,1642 @@
+---
+title: "Modelling long-term obesity prevalence with poor data quality in developing countries: The case of  Chile"
+author:
+  - Luis Rojo-González^[Universitat Politècnica de Catalunya, luis.rojo.g@usach.cl]
+date: ""
+output:
+  pdf_document:
+    fig_caption: yes
+    toc: true # table of content true
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    highlight: haddock  # specifies the syntax highlighting style
+    # highlight: monochrome  # specifies the syntax highlighting style
+  header-includes:
+  - \usepackage{float}
+  - \usepackage{amsmath}
+  - \usepackage[spanish]{babel}
+  - \usepackage[utf8]{inputenc}
+  - \usepackage{natbib}
+  - \usepackage{booktabs}
+  - \usepackage{hyperref}
+  html_document:
+    df_print: paged
+params:
+  seed: 12345
+  alpha: 0.05
+abstract: ""
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r echo = FALSE}
+# Working directory
+setwd("~/Desktop/ThesisUPC")
+```
+
+```{r message=FALSE, warning=FALSE}
+# install.packages("tikzDevice")
+library(tikzDevice)
+options(mc.cores = parallel::detectCores(),
+        tz="CA")
+```
+
+\chapter{Obesity, a public health challenge} \label{chap:obesity}
+
+```{r message=FALSE, warning=FALSE}
+library(readr)
+data = read_csv("~/Desktop/ThesisUPC/WhoData/NCD_RisC_Lancet_2017_BMI_age_standardised_country.txt")
+
+# library(dplyr)
+library(tidyverse)
+data = data[, c(1, 3, 4, 8)] %>%
+  filter(Year == 2016)
+colnames(data) = c("region", "Sex", "Year", "Prevalence")
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+ranking = data %>%
+  dplyr::select(-c("Year")) %>%
+  spread(Sex, Prevalence)
+ranking = ranking[order(ranking$Women, decreasing = TRUE),]
+print(xtable(ranking[1:20, ],
+             digits = 2, label = "tab:obprev",
+             caption = "Top 20 countries according to obesity prevalence by sex in 2016. Ordered in decreasing order according to women obesity prevalence."),
+             caption.placement = "top", comment = FALSE, include.rownames = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(rworldmap)
+map.world = map_data(map = "world")
+
+library(passport)
+data$region = parse_country(data$region, to = "iso2c",
+                            how = "regex",
+                            language = "en")
+
+map.world$region = parse_country(map.world$region, to = "iso2c",
+                                 how = "regex",
+                                 language = "en")
+
+map.world$PrevalenceMen = left_join(map.world, data %>%
+                                      filter(Sex == "Men") %>%
+                                      dplyr::select(c("region", "Prevalence")),
+                                    by = c("region"))
+
+map.world$PrevalenceWomen = left_join(map.world, data %>%
+                                        filter(Sex == "Women") %>%
+                                        dplyr::select(c("region", "Prevalence")),
+                                      by = c("region"))
+```
+
+```{r fig.height = 5, fig.width = 10, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(ggpubr)
+
+(wpMen = map.world$PrevalenceMen %>%
+  ggplot() +
+  geom_map(map = map.world,
+           aes(map_id = region, x = long, y = lat),
+           col = "black", fill = "grey") +
+  geom_map(map = map.world, col = "black",
+           aes(map_id = region,
+               x = long, y = lat,
+               fill = Prevalence)) +
+  ylim(c(-55, 80)) +
+  labs(title = "Men", x = "", y = "",
+       fill = "Obesity prevalence") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                   size = 10),
+        axis.text.x = element_blank(), # whether to show the lines on
+        axis.text.y = element_blank(), # the axis
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  scale_fill_gradient(low = "yellow", high = "red2",
+                      labels = scales::percent(x = seq(from = 0,
+                                                       to = 0.6,
+                                                       by = 0.15),
+                                               accuracy = 1),
+                      breaks = seq(from = 0, to = 0.6, by = 0.15),
+                      na.value = "grey"))
+
+ggsave("Document/Figures/MapMen.png",
+       width = 35, height = 20, units = "cm")
+
+(wpWomen = map.world$PrevalenceWomen %>%
+  ggplot() +
+  geom_map(map = map.world,
+           aes(map_id = region, x = long, y = lat),
+           col = "black", fill = "grey") +
+  geom_map(map = map.world, col = "black",
+           aes(map_id = region,
+               x = long, y = lat,
+               fill = Prevalence)) +
+  ylim(c(-55, 80)) +
+  labs(title = "Women", x = "", y = "",
+       fill = "Obesity prevalence") +
+  # scale_fill_discrete(na.translate = FALSE, na.value = "grey") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                   size = 10),
+        axis.text.x = element_blank(), # whether to show the lines on
+        axis.text.y = element_blank(), # the axis
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  scale_fill_gradient(low = "yellow", high = "red2",
+                      labels = scales::percent(x = seq(from = 0,
+                                                       to = 0.6,
+                                                       by = 0.15),
+                                               accuracy = 1),
+                      breaks = seq(from = 0, to = 0.6, by = 0.15),
+                      na.value = "grey"))
+
+ggsave("Document/Figures/MapWomen.png",
+       width = 35, height = 20, units = "cm")
+
+wpMenWomen = ggarrange(wpMen, wpWomen,
+                       labels = c("a)", "b)"),
+                       hjust = -0.8,
+                       vjust = 3,
+                       ncol = 1,
+                       common.legend = TRUE,
+                       legend = "none",
+                       font.label = list(size = 10),
+                       align = "hv")
+
+ggsave("Document/Figures/MapObesity.png",
+       width = 35, height = 35, units = "cm")
+```
+
+```{r}
+# save as tikz files
+# tikz(file = "Document/Figures/MapMen.tex",
+#      width = 6.5,
+#      height = 5,
+#      standAlone = FALSE,
+#      onefile = FALSE,
+#      engine = "pdftex",
+#      sanitize = TRUE)
+# 
+# wpMen
+# 
+# dev.off()
+# 
+# tikz(file = "Document/Figures/MapWomen.tex",
+#      width = 6.5,
+#      height = 5,
+#      standAlone = FALSE,
+#      onefile = FALSE,
+#      engine = "pdftex",
+#      sanitize = TRUE)
+# 
+# wpWomen
+# 
+# dev.off()
+
+tikz(file = "Document/Figures/MapObesity.tex",
+     width = 6.5,
+     height = 7,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+wpMenWomen
+
+dev.off()
+```
+
+\chapter{Discretization and data wrangling} \label{chap:data}
+
+\subsection{Exploratory data analysis}
+
+```{r}
+colvar = c("Sex", "Age", "BMI", "EF")
+library(haven)
+ENS1 = read_sav("~/Desktop/ThesisUPC/ENS/2003/ENS.sav")
+ENS1 = ENS1 %>% dplyr::select(c("sexo", "edad", "imc", "fact_aex"))
+ENS1[] = lapply(ENS1, function(x) { attributes(x) = NULL; x })
+colnames(ENS1) = colvar
+ENS1$Year = 2003
+
+ENS2 = read_sav("~/Desktop/ThesisUPC/ENS/2010/ENS.sav")
+ENS2 = ENS2 %>% dplyr::select(c("SEXO", "EDAD", "imc", "FEXP_factor"))
+ENS2[] = lapply(ENS2, function(x) { attributes(x) = NULL; x })
+colnames(ENS2) = colvar
+ENS2$Year = 2010
+
+ENS3 = read_sav("~/Desktop/ThesisUPC/ENS/2017/ENSComuna.sav")
+ENS3 = ENS3 %>% dplyr::select(c("Sexo", "Edad", "IMC", "Fexp_EX1p_Corr"))
+ENS3[] = lapply(ENS3, function(x) { attributes(x) = NULL; x })
+colnames(ENS3) = colvar
+ENS3$Year = 2017
+ENS = rbind(ENS1, ENS2, ENS3)
+
+ENS = ENS %>%
+  mutate(Sex = factor(ifelse(Sex == 1, "Men", "Women"),
+                      levels = c("Men", "Women")),
+         Age = as.numeric(Age),
+         BMI = as.numeric(BMI),
+         EF = as.numeric(EF),
+         Year = factor(Year))
+```
+
+```{r}
+# limpieza
+age_group = function(x){
+  aux = x %>%
+    # na.omit() %>%
+    # filter(BMI >= 17 & BMI <= 36) %>%
+    mutate(group_age = ifelse(Age %in% 15:24, "15-24",
+                              ifelse(Age %in% 25:34, "25-34",
+                                     ifelse(Age %in% 35:44, "35-44",
+                                            ifelse(Age %in% 45:54, "45-54",
+                                                   ifelse(Age %in% 55:64, "55-64",
+                                                          ifelse(Age %in% 65:74, "65-74",
+                                                                 "75+")))))),
+           group_age = as.factor(group_age))
+  # return(aux)
+}
+```
+
+```{r}
+### function to discretize by bmi
+bmi_group = function(x) {
+  x %>%
+    mutate(group_bmi = round(BMI),
+           group_bmi = as.factor(group_bmi))
+}
+```
+
+```{r}
+descriptive = function(x){
+  x  %>%
+    # replace(is.na(.), 0) %>%
+    # dplyr::select(-c("group_bmi", "group_age")) %>%
+    gather(key = "Variable", value = "value",
+           -Sex, -EF, -Year,
+           factor_key = TRUE) %>%
+    unite(temp, Year, Variable) %>%
+    group_by(Sex, temp) %>%
+    summarise(Min = round(min(value, na.rm = TRUE), 2),
+              Q1 = round(quantile(value, probs = 0.25, na.rm = TRUE), 2),
+              Q2 = round(quantile(value, probs = 0.5, na.rm = TRUE), 2),
+              Mean = round(mean(value, na.rm = TRUE), 2),
+              Q3 = round(quantile(value, probs = 0.75, na.rm = TRUE), 2),
+              Max = round(max(value, na.rm = TRUE), 2),
+              SD = round(sd(value, na.rm = TRUE), 2),
+              Missing = sum(is.na(value)),
+              Respondents = n()) %>%
+    gather(key = "Variable", value = "value", -Sex, -temp) %>%
+    mutate(Variable = factor(Variable,
+                             levels = c("Min", "Q1", "Q2",
+                                        "Mean", "Q3", "Max",
+                                        "SD", "Missing", "Respondents"))) %>%
+    spread(temp, value)
+}
+```
+
+```{r results = 'asis'}
+# print table in latex format
+print(xtable(descriptive(ENS),
+             digits = 2, label = "tab:ENSdescription",
+             caption = "Descriptive statistics for National Health Surveys by sex over BMI."),
+             caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 8, 9, 17, 18))
+```
+
+```{r}
+ENS %>%
+  # dplyr::select(-c("group_bmi", "group_age")) %>%
+  replace(is.na(.), 0) %>%
+  group_by(Year, Sex) %>%
+  summarise(Total = n()) %>%
+  mutate(Total = round(100*Total/sum(Total), 2)) %>%
+  spread(Year, Total)
+```
+
+```{r}
+# repeat the observations over the expansion factor
+ENS_EF = ENS[rep(1:nrow(ENS),
+                 as.vector(ENS$EF %>%
+                             replace(is.na(.), 0))), ]
+summary(ENS_EF)
+```
+
+```{r results = 'asis'}
+# print table in latex format
+print(xtable(descriptive(ENS_EF),
+             digits = 2, label = "tab:ENSdescription",
+             caption = "Descriptive statistics for National Health Surveys by sex over BMI."),
+             caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 8, 9, 17, 18))
+```
+
+```{r}
+ENS_EF %>%
+  # dplyr::select(-c("group_bmi", "group_age")) %>%
+  replace(is.na(.), 0) %>%
+  group_by(Year, Sex) %>%
+  summarise(Total = n()) %>%
+  mutate(Total = round(100*Total/sum(Total), 2)) %>%
+  spread(Year, Total)
+```
+
+```{r}
+# drop the outliers
+ENS = ENS %>% filter(BMI >= 17, BMI <= 36) %>%
+  age_group() %>% bmi_group()
+ENS_EF = ENS_EF %>% filter(BMI >= 17, BMI <= 36) %>%
+  age_group() %>% bmi_group()
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+dens1 = ENS %>%
+  na.omit() %>%
+  dplyr::select(c("Sex", "BMI", "Year", "group_age")) %>%
+  gather(key = "Variable", value = "BMI",
+         -Sex, -Year, -group_age,
+         factor_key = TRUE) %>%
+  ggplot() +
+  geom_density(aes(x = BMI, fill = Year), alpha = 0.3) +
+  facet_grid(Sex ~ group_age,
+             scales = "free_y",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Body mass index",
+       y = "density",
+       title = "Without expansion factor") +
+  scale_x_continuous(breaks = seq(18, 36, 6))
+
+ggsave("Document/Figures/BMIDens.png",
+       width = 35, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMIDens.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+dens1
+
+dev.off()
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+hist1 = ENS %>%
+  na.omit() %>%
+  dplyr::select(c("Sex", "Year",
+                  "group_age", "group_bmi")) %>%
+  gather(key = "Variable", value = "BMI",
+         -Sex, -Year, -group_age,
+         factor_key = TRUE) %>%
+  ggplot() +
+  geom_histogram(aes(x = BMI, fill = Year),
+                 alpha = 0.3, colour = "black",
+                 position = "identity",
+                 stat = "count") +
+  facet_grid(Sex ~ group_age,
+             scales = "free_y",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Body mass index",
+       y = "counting",
+       title = "Without expansion factor") +
+  scale_x_discrete(breaks = seq(18, 36, 6))
+
+ggsave("Document/Figures/BMIhist.png",
+       width = 35, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMIhist.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+hist1
+
+dev.off()
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+dens2 = ENS_EF %>%
+  na.omit() %>%
+  dplyr::select(c("Sex", "BMI", "Year", "group_age")) %>%
+  gather(key = "Variable", value = "BMI",
+         -Sex, -Year, -group_age,
+         factor_key = TRUE) %>%
+  ggplot() +
+  geom_density(aes(x = BMI, fill = Year), alpha = 0.3) +
+  facet_grid(Sex ~ group_age,
+             scales = "free_y",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Body mass index",
+       y = "density",
+       title = "With expansion factor") +
+  scale_x_continuous(breaks = seq(18, 36, 6))
+
+ggsave("Document/Figures/BMIDensEF.png",
+       width = 35, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMIDensEF.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+dens2
+
+dev.off()
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+hist2 = ENS_EF %>%
+  na.omit() %>%
+  dplyr::select(c("Sex", "Year",
+                  "group_age", "group_bmi")) %>%
+  gather(key = "Variable", value = "BMI",
+         -Sex, -Year, -group_age,
+         factor_key = TRUE) %>%
+  ggplot() +
+  geom_histogram(aes(x = BMI, fill = Year),
+                 alpha = 0.3, colour = "black",
+                 position = "identity",
+                 stat = "count") +
+  facet_grid(Sex ~ group_age,
+             scales = "free_y",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Body mass index",
+       y = "counting",
+       title = "With expansion factor") +
+  scale_x_discrete(breaks = seq(18, 36, 6))
+
+ggsave("Document/Figures/BMIhistEF.png",
+       width = 35, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMIhistEF.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+hist2
+
+dev.off()
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+tikz(file = "Document/Figures/BMIDens2.tex",
+     width = 6.5,
+     height = 7,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+ggarrange(dens1, dens2,
+          labels = c("a)", "b)"),
+          hjust = -0.8,
+          vjust = 3,
+          ncol = 1,
+          common.legend = TRUE,
+          legend = "bottom",
+          font.label = list(size = 10),
+          align = "hv")
+
+dev.off()
+
+ggsave("Document/Figures/BMIDens2.png",
+       width = 35, height = 35, units = "cm")
+
+tikz(file = "Document/Figures/BMIHist2.tex",
+     width = 6.5,
+     height = 7,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+ggarrange(hist1, hist2,
+          labels = c("a)", "b)"),
+          hjust = -0.8,
+          vjust = 3,
+          ncol = 1,
+          common.legend = TRUE,
+          legend = "bottom",
+          font.label = list(size = 10),
+          align = "hv")
+
+dev.off()
+
+ggsave("Document/Figures/BMIHist2.png",
+       width = 35, height = 35, units = "cm")
+```
+
+```{r}
+population_EF = ENS_EF %>%
+  group_by(Sex, Year, group_age,
+           group_bmi, .drop = FALSE) %>%
+  summarise(pop = n()) %>%
+  ungroup()
+```
+
+```{r}
+# zero-counting by sex
+population_EF %>%
+  group_by(Sex, .drop = FALSE) %>%
+  summarise(zero = round(100*sum(pop == 0)/n(), 2)) %>%
+  ungroup()
+
+# zero-counting by Year
+population_EF %>%
+  group_by(Year, .drop = FALSE) %>%
+  summarise(zero = round(100*sum(pop == 0)/n(), 2)) %>%
+  ungroup()
+
+# zero-counting by age group
+population_EF %>%
+  group_by(group_age, .drop = FALSE) %>%
+  summarise(zero = round(100*sum(pop == 0)/n(), 2)) %>%
+  ungroup()
+
+# zero-counting by Sex and age group
+population_EF %>%
+  group_by(Sex, group_age, .drop = FALSE) %>%
+  summarise(zero = round(100*sum(pop == 0)/n(), 2)) %>%
+  ungroup()
+```
+
+```{r results = 'asis'}
+# print table in latex format
+print(xtable(population_EF %>%
+               group_by(group_bmi, group_age, .drop = FALSE) %>%
+               summarise(zero = round(100*sum(pop == 0)/n(), 2)) %>%
+               ungroup() %>%
+               filter(zero != 0) %>%
+               spread(group_age, zero, fill = 0),
+             digits = 2, label = "tab:zerocounting",
+             caption = "Proportion of the times that a zero-counting occurs in any survey for any sex."),
+             caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 6))
+```
+
+```{r}
+library(xlsx)
+wb = createWorkbook()
+sexes = c("Men", "Women")
+years = c("2003", "2010", "2017")
+for (i in 1:length(sexes)) {
+  sheet = createSheet(wb, sexes[i])
+  for (j in 1:length(years)) {
+    population_EF %>%
+      filter(Sex == sexes[i], Year == years[j]) %>%
+      dplyr::select(-c(Sex, Year)) %>%
+      spread(group_age, pop) %>%
+      addDataFrame(sheet = sheet,
+                   startColumn = 1+10*(j-1),
+                   startRow = 1,
+                   row.names = TRUE)
+  }
+}
+saveWorkbook(wb, "Data/PopulationENS.xlsx")
+```
+
+\subsection{Log-normal distribution fitting}
+
+```{r}
+(lnorm_params = ENS_EF %>%
+   dplyr::select(-c("Age", "EF", "group_bmi")) %>%
+   group_by(Sex, Year, group_age, .drop = FALSE) %>%
+   summarise(log_mean = sum(log(BMI))/n(),
+             sd = sqrt(sum((log(BMI) - log_mean)^2)/(n()-1))) %>%
+   ungroup() %>%
+   gather(key = "Parameter", value = "value",
+          -Sex, -Year, -group_age) %>%
+   unite(temp, group_age, Parameter) %>%
+   spread(temp, value))
+```
+
+```{r results = 'asis'}
+# print table in latex format
+print(xtable(lnorm_params,
+             digits = 2, label = "tab:lnormalparameters",
+             caption = "Fitted parameters of the BMI over age ranges for a log-normal distribution, where multi-factorial effects have multiplicative effects."),
+             caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 3, 6))
+```
+
+\subsubsection{Simulation of the population}
+
+We have to be awarded that the numbers must be between 17 and 36.
+
+```{r}
+# obtained from the projection at 2050, INE
+library(readxl)
+pop2050_Men = read_excel("Data/Population2050.xlsx",
+                         sheet = "Men")
+pop2050_Men = pop2050_Men %>%
+  filter(Age >= 15) %>%
+  dplyr::select(c("Age", "2003", "2010", "2017")) %>%
+  mutate(Sex = "Men")
+pop2050_Women = read_excel("Data/Population2050.xlsx",
+                           sheet = "Women")
+pop2050_Women = pop2050_Women %>%
+  filter(Age >= 15) %>%
+  dplyr::select(c("Age", "2003", "2010", "2017")) %>%
+  mutate(Sex = "Women")
+
+pop2050 = rbind(pop2050_Men, pop2050_Women)
+pop2050 = age_group(pop2050)
+
+pop2050 = pop2050 %>%
+  dplyr::select(-c("Age")) %>%
+  gather(key = "Year", value = "Population",
+         -Sex, -group_age, factor_key = TRUE) %>%
+  group_by(Year, Sex, group_age) %>%
+  summarise(pop = sum(Population)) %>%
+  ungroup()
+```
+
+```{r}
+# perform the random number simulation according to the real
+# popuation using the parameters estimated from the ENS
+
+# searching way
+sexes = c("Men", "Women")
+ages = c("15-24", "25-34", "35-44",
+         "45-54", "55-64", "65-74", "75+")
+years = c("2003", "2010", "2017")
+
+pop_sim = data.frame()
+set.seed(params$seed)
+for (i in 1:length(sexes)) {
+  for (j in 1:length(years)) {
+    for (k in 1:length(ages)) {
+      sim = data.frame(BMI = rlnorm(n = pop2050 %>%
+                                      filter(Sex == sexes[i],
+                                             group_age == ages[k],
+                                             Year == years[j]) %>%
+                                      dplyr::select(c("pop")) %>%
+                                      as.numeric(),
+                                    meanlog = lnorm_params %>%
+                                      filter(Sex == sexes[i],
+                                             group_age == ages[k],
+                                             Parameter == "log_mean",
+                                             Year == years[j]) %>%
+                                      dplyr::select(c("value")) %>%
+                                      as.numeric(),
+                                    sdlog = lnorm_params %>%
+                                      filter(Sex == sexes[i],
+                                             group_age == ages[k],
+                                             Parameter == "sd",
+                                             Year == years[j]) %>%
+                                      dplyr::select(c("value")) %>%
+                                      as.numeric()))
+      sim = sim[which(sim >= 17 & sim <= 36), "BMI"]
+      sim = sample(sim, pop2050 %>%
+               filter(Sex == sexes[i],
+                      group_age == ages[k],
+                      Year == years[j]) %>%
+               dplyr::select(c("pop")) %>%
+               as.numeric(),
+             replace = TRUE) %>%
+        as.data.frame() %>%
+        mutate(Sex = sexes[i],
+               Year = years[j],
+               group_age = ages[k])
+      pop_sim = rbind(pop_sim, sim)
+    }
+  }
+}
+
+colnames(pop_sim) = c("BMI", "Sex", "Year", "group_age")
+pop_sim = bmi_group(pop_sim)
+
+# summary(pop_sim)
+```
+
+```{r}
+population_sim = pop_sim %>%
+  group_by(Sex, Year, group_age,
+           group_bmi, .drop = FALSE) %>%
+  summarise(pop = n()) %>%
+  ungroup()
+```
+
+```{r}
+population_sim %>%
+  group_by(Sex, Year, group_age, group_bmi) %>%
+  summarise(tot = sum(pop)) %>%
+  ungroup() %>%
+  filter(Sex == "Men", Year == "2010") %>%
+  dplyr::select(-c("Sex", "Year")) %>%
+  spread(group_age, tot)
+```
+
+```{r}
+library(xlsx)
+# wb = createWorkbook()
+# wb = loadWorkbook("Data/PopulationENS.xlsx")
+sexes = c("Men", "Women")
+years = c("2003", "2010", "2017")
+for (i in 1:length(sexes)) {
+  # sheet = createSheet(wb, paste0(sexes[i],"_clean"))
+  for (j in 1:length(years)) {
+    population_sim %>%
+      filter(Sex == sexes[i], Year == years[j]) %>%
+      dplyr::select(-c(Sex, Year)) %>%
+      spread(group_age, pop) %>%
+      dplyr::select(-c("group_bmi")) %>%
+      write.table(paste0("Data/",sexes[i],"/Population_clean_",
+                         years[j],".txt"),
+                append = FALSE, sep = " ", dec = ".",
+                row.names = FALSE, col.names = FALSE)
+      # addDataFrame(sheet = sheet,
+      #              startColumn = 1+10*(j-1),
+      #              startRow = 1,
+      #              row.names = TRUE)
+  }
+}
+# saveWorkbook(wb, "Data/PopulationENS.xlsx")
+```
+
+```{r fig.height = 6, fig.width = 10, warning=FALSE, message=FALSE}
+(BMIhist_sim = pop_sim %>%
+   ggplot() +
+   # geom_col(aes(x = group_bmi,
+   #              y = pop,
+   #              fill = Year),
+   #          alpha = 0.5) +
+   geom_histogram(aes(x = group_bmi, fill = Year),
+                  alpha = 0.5, colour = "black",
+                  position = "identity",
+                  stat = "count") +
+   facet_grid(Sex ~ group_age,
+              scales = "fixed",
+              space = "fixed",
+              switch = "y") +
+   theme_bw() +
+   theme(plot.title = element_text(colour = "black",
+                                   size = 10),
+         axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                    hjust = 0.5, # the axis
+                                    vjust = 0.5,
+                                    colour = "black",
+                                    size = 10),
+         axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                    hjust = 0.5, # the axis
+                                    vjust = 0.5,
+                                    colour = "black",
+                                    size = 10),
+         # axis.ticks.x = element_blank(),
+         # axis.ticks.y = element_blank(), # to control the appearance
+         panel.margin = unit(1, "lines"), # space around the panel in grid
+         legend.margin = margin(2, 2, 2, 2), # space around the legend box
+         legend.position = "bottom",     # of the plot
+         # legend.key.width = unit(3.9, "cm"), # length of the legend
+         legend.box = "vertical",
+         legend.spacing = unit(0.2, "lines"),
+         legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+         legend.background = element_rect(fill = "white",
+                                          size = 0.5,
+                                          linetype = "solid",
+                                          colour = "black"),
+         legend.text = element_text(colour = "black",
+                                    size = 10),
+         legend.title = element_text(colour = "black",
+                                     size = 10),
+         strip.text.x = element_text(colour = "black",
+                                     size = 10),
+         strip.text.y = element_text(colour = "black",
+                                     size = 10),
+         plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+   labs(x = "Body mass index",
+        y = "counting") +
+   scale_x_discrete(breaks = seq(18, 36, 6)))
+
+ggsave("Document/Figures/BMIhist_sim.png",
+       width = 35, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMIhist_sim.tex",
+     width = 6.5,
+     height = 3.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+BMIhist_sim
+
+dev.off()
+```
+
+\section{Demographic variables}
+
+\subsection{Population growth}
+
+```{r}
+library(xlsx)
+library(readxl)
+
+sexes = c("Men", "Women")
+grid.year = read_excel("NLP/Experiments.xlsx",
+                       range = "C2:D8", col_names = TRUE)
+
+for (i in 1:length(sexes)) {
+  for (j in 1:nrow(grid.year)) {
+    pot.year = as.numeric(abs(grid.year[j,2]-grid.year[j,1]))
+    population_sim %>%
+    filter(Year == as.character(grid.year[j,1]) | Year == as.character(grid.year[j,2]),
+           Sex == sexes[i]) %>%
+    dplyr::select(-c("Sex")) %>%
+    spread(Year, pop) %>%
+    mutate(Growth = 1-((.[[4]]/.[[3]])^(1/pot.year))) %>%
+    dplyr::select(c("group_age", "group_bmi", "Growth")) %>%
+    spread(group_age, Growth) %>%
+    dplyr::select(-c("group_bmi")) %>%
+    write.table(paste0("Data/",sexes[i],"/PopulationGrowth_",
+                       sexes[i],"_",grid.year[j,1],"_",grid.year[j,2],".txt"),
+                append = FALSE, sep = " ", dec = ".",
+                row.names = FALSE, col.names = FALSE)
+  }
+}
+```
+
+\subsection{Population weight}
+
+```{r}
+library(xlsx)
+# wb = createWorkbook()
+# sheet = createSheet(wb, "Proportion")
+sexes = c("Men", "Women")
+years = c("2003", "2010", "2017")
+
+for (i in 1:length(years)) {
+  for (j in 1:length(sexes)) {
+    population_sim %>%
+      filter(Year == years[i],
+             Sex == sexes[j]) %>%
+      dplyr::select(-c("Year", "Sex", "group_bmi")) %>%
+      group_by(group_age) %>%
+      summarise(Total = sum(pop)) %>%
+      ungroup() %>%
+      mutate(Prop = Total/sum(Total)) %>%
+      dplyr::select(c("Prop")) %>%
+      as.matrix() %>% t() %>%
+      write.table(paste0("Data/",sexes[j],"/Populationweight_",
+                           sexes[j],"_",years[i],".txt"),
+                    append = FALSE, sep = " ", dec = ".",
+                    row.names = FALSE, col.names = FALSE)
+  }
+}
+#   addDataFrame(sheet = sheet,
+#                startColumn = 1,
+#                startRow = 1,
+#                row.names = TRUE)
+# saveWorkbook(wb, "Data/PopulationWeight.xlsx")
+```
+
+\subsection{Population in the age range boundaries by year}
+
+```{r}
+library(readxl)
+pop2050_Men = read_excel("Data/Population2050.xlsx",
+                         sheet = "Men")
+pop2050_Men = pop2050_Men %>%
+  filter(Age >= 15) %>%
+  mutate(Sex = "Men")
+pop2050_Women = read_excel("Data/Population2050.xlsx",
+                           sheet = "Women")
+pop2050_Women = pop2050_Women %>%
+  filter(Age >= 15) %>%
+  mutate(Sex = "Women")
+
+pop2050 = rbind(pop2050_Men, pop2050_Women)
+pop2050 = age_group(pop2050)
+```
+
+```{r}
+library(xlsx)
+sexes = c("Men", "Women")
+# wb = createWorkbook()
+
+for (i in 1:length(sexes)) {
+  # sheet = createSheet(wb, sexes[i])
+  pop2050 %>%
+    gather(key = "Year", value = "Population",
+           -Age, -group_age, -Sex) %>%
+    filter(Year %in% 2003:2024, Sex == sexes[i]) %>%
+    group_by(Sex, group_age, Year) %>%
+    mutate(Total = sum(Population)) %>%
+    ungroup() %>%
+    filter(Age %in% c(24, 34, 44, 54, 64, 74, 75)) %>%
+    mutate(Proportion = ifelse(Age == 75, 0, Population/Total)) %>%
+    dplyr::select(c("group_age", "Year", "Proportion")) %>%
+    spread(Year, Proportion) %>%
+    dplyr::select(-c("group_age")) %>%
+    write.table(paste0("Data/",sexes[i],"/AgeBoundaryProportion_",
+                       sexes[i],".txt"),
+                append = FALSE, sep = " ", dec = ".",
+                row.names = FALSE, col.names = FALSE)
+    # addDataFrame(sheet = sheet,
+    #              startColumn = 1,
+    #              startRow = 1,
+    #              row.names = TRUE)
+}
+# saveWorkbook(wb, "Data/AgeBoundaryProportion.xlsx")
+```
+
+\section{Transition probabilities, feasible bounds}
+
+```{r}
+library(readxl)
+# Men
+LitBoundsMen = read_excel("Data/LitBounds.xlsx", 
+                          range = "D3:F24")
+LitBoundsMen$NS = c(rep("Underweight", 3),
+                    rep("Normal", 5),
+                    rep("Overweight", 7),
+                    rep("Obese", 6))
+LitBoundsMen$Sex = "Men"
+
+# Women
+LitBoundsWomen = read_excel("Data/LitBounds.xlsx", 
+                            range = "G3:I24")
+LitBoundsWomen$NS = c(rep("Underweight", 3),
+                    rep("Normal", 5),
+                    rep("Overweight", 7),
+                    rep("Obese", 6))
+LitBoundsWomen$Sex = "Women"
+
+# Conjunto
+LitBounds = rbind(LitBoundsMen, LitBoundsWomen)
+LitBounds = LitBounds %>%
+  mutate(NS = factor(NS, levels = c("Underweight", "Normal",
+                                    "Overweight", "Obese")),
+         Sex = factor(Sex, levels = c("Men", "Women")))
+```
+
+```{r fig.height = 7, fig.width = 10, warning=FALSE, message=FALSE}
+LitBounds %>%
+  gather(key = "Transition", value = "value",
+         -NS, -Sex, factor_key = TRUE) %>%
+  ggplot() +
+  geom_density(aes(x = value, fill = NS,
+                   colour = NS),
+               alpha = 0.3) +
+  facet_grid(Sex ~ Transition,
+             scales = "free_y",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Transition probability",
+       y = "density",
+       fill = "Nutritional status",
+       colour = "Nutritional status") +
+  scale_x_continuous(labels = scales::percent)
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+resBounds = LitBounds  %>%
+  # replace(is.na(.), 0) %>%
+  gather(key = "Transition", value = "value",
+         -NS, -Sex, factor_key = TRUE) %>%
+  unite(temp, Transition, Sex) %>%
+  group_by(NS, temp) %>%
+  summarise(Min = round(min(value, na.rm = TRUE), 2),
+            Q1 = round(quantile(value, probs = 0.25, na.rm = TRUE), 2),
+            Q2 = round(quantile(value, probs = 0.5, na.rm = TRUE), 2),
+            Mean = round(mean(value, na.rm = TRUE), 2),
+            Q3 = round(quantile(value, probs = 0.75, na.rm = TRUE), 2),
+            Max = round(max(value, na.rm = TRUE), 2),
+            SD = round(sd(value, na.rm = TRUE), 2)) %>%
+  mutate(temp = factor(temp, levels = c("Decrease_Men", "Remain_Men",
+                                        "Increase_Men", "Decrease_Women",
+                                        "Remain_Women", "Increase_Women"))) %>%
+  gather(key = "Variable", value = "value", -NS, -temp) %>%
+  mutate(Variable = factor(Variable, levels = c("Min", "Q1", "Q2",
+                                                "Mean", "Q3", "Max", "SD"))) %>%
+  filter(value >= 0, value <= 1) %>%
+  spread(temp, value, fill = "-")
+# print table in latex format
+print(xtable(resBounds,
+             digits = 2, label = "tab:boundssummary",
+             caption = "Descriptive statistics for transition probabilities between nutritional statuses found in the leterature."),
+          caption.placement = "top",
+          comment = FALSE,
+          include.rownames = FALSE,
+          include.colnames = TRUE,
+          hline.after = c(-1, 0, 7, 14, 21, 28))
+```
+
+```{r message=FALSE, warning=FALSE}
+bounds_aux = resBounds %>%
+  ungroup() %>%
+  filter(Variable == "Min" | Variable == "Max") %>%
+  gather(key = "Transition", value = "value", -NS, -Variable) %>%
+  mutate(value = ifelse(value < 0 | value > 1, NA, value)) %>%
+  separate(Transition, c("Transition", "Sex")) %>%
+  mutate(Transition = factor(Transition, levels = c("Decrease",
+                                                    "Remain",
+                                                    "Increase")),
+         Sex = factor(Sex, levels = c("Men", "Women"))) %>%
+  spread(Variable, value)
+
+# grid distance
+delta = 0.01
+
+bounds_aux_1 = rbind(expand.grid(NS = "Underweight",
+                                 Sex = c("Men", "Women"),
+                                 Transition = c("Decrease", "Remain", "Increase"),
+                                 BMI = seq(17, 18.5, delta)),
+                     expand.grid(NS = "Normal",
+                                 Sex = c("Men", "Women"),
+                                 Transition = c("Decrease", "Remain", "Increase"),
+                                 BMI = seq(18.5, 25, delta)),
+                     expand.grid(NS = "Overweight",
+                                 Sex = c("Men", "Women"),
+                                 Transition = c("Decrease", "Remain", "Increase"),
+                                 BMI = seq(25, 30, delta)),
+                     expand.grid(NS = "Obese",
+                                 Sex = c("Men", "Women"),
+                                 Transition = c("Decrease", "Remain", "Increase"),
+                                 BMI = seq(30, 36, delta))) %>%
+  mutate(BMI_li = ifelse(NS == "Underweight", 17,
+                         ifelse(NS == "Normal", 18.5,
+                                ifelse(NS == "Overweight", 25, 30))),
+         BMI_ls = ifelse(NS == "Underweight", 18.5,
+                         ifelse(NS == "Normal", 25,
+                                ifelse(NS == "Overweight", 30, 36))))
+
+bounds = left_join(bounds_aux_1, bounds_aux,
+                   by = c("NS", "Transition", "Sex")) %>%
+  mutate(Min = as.numeric(Min),
+         Max = as.numeric(Max))
+
+set.seed(params$alpha)
+scenarios = 10
+for(i in 1:scenarios) {
+  aux_bounds = with(bounds, round(runif(length(BMI),
+                                        Min, Max), 2))
+  bounds = cbind(bounds, round(runif(length(bounds$BMI),
+                                      bounds$Min, aux_bounds), 2),
+                 round(runif(length(bounds$BMI),
+                             aux_bounds, bounds$Max), 2))
+}
+colnames(bounds) = c(names(bounds[1:8]),
+                     paste0(rep(c("li_", "ls_"), scenarios),
+                            rep(1:scenarios, each = 2)))
+
+# this check the continuity further than the bounds
+# according to the nutritional statuses
+# ------ Underweight ------
+bounds[bounds$NS == "Underweight" &
+         bounds$Sex == "Men" &
+         bounds$Transition == "Decrease" &
+         bounds$BMI != 17, 9:ncol(bounds)] = bounds %>%
+  # filter with the next nutritional status due to
+  # it is the first known value
+  filter(NS == "Normal", Sex == "Men",
+         Transition == "Decrease",
+         BMI == 18.5) %>%
+  dplyr::select(-c(names(bounds[c(1:8)])))
+
+bounds[bounds$NS == "Underweight" &
+         bounds$Sex == "Women" &
+         bounds$Transition == "Decrease" &
+         bounds$BMI != 17, 9:ncol(bounds)] = bounds %>%
+  # filter with the next nutritional status due to
+  # it is the first known value
+  filter(NS == "Normal", Sex == "Women",
+         Transition == "Decrease",
+         BMI == 18.5) %>%
+  dplyr::select(-c(names(bounds[c(1:8)])))
+
+# ------ Obese ------ 
+bounds[bounds$NS == "Obese" &
+         bounds$Sex == "Men" &
+         bounds$Transition == "Increase" &
+         bounds$BMI != 36, 9:ncol(bounds)] = bounds %>%
+  # filter with the next nutritional status due to
+  # it is the last known value
+  filter(NS == "Overweight", Sex == "Men",
+         Transition == "Increase",
+         BMI == 30) %>%
+  dplyr::select(-c(names(bounds[c(1:8)])))
+
+bounds[bounds$NS == "Obese" &
+         bounds$Sex == "Women" &
+         bounds$Transition == "Increase" &
+         bounds$BMI != 36, 9:ncol(bounds)] = bounds %>%
+  # filter with the next nutritional status due to
+  # it is the last known value
+  filter(NS == "Overweight", Sex == "Women",
+         Transition == "Increase",
+         BMI == 30) %>%
+  dplyr::select(-c(names(bounds[c(1:8)])))
+```
+
+```{r fig.height = 7, fig.width = 10, warning=FALSE, message=FALSE}
+(plot_scenario = bounds %>%
+   filter(BMI %in% c(seq(17, 18.5, 0.5), 25, 35, seq(20, 36, 2))) %>%
+   dplyr::select(-c("BMI_li", "BMI_ls")) %>%
+   gather(key = "Scenario", value = "Prob",
+          -c("NS", "Transition", "Sex",
+             "Min", "Max", "BMI"),
+          factor_key = TRUE) %>%
+   separate(Scenario, c("Bound", "Scenario")) %>%
+   filter(Scenario == 1) %>%
+   mutate(Transition = factor(Transition,
+                              levels = c("Decrease", "Remain", "Increase"),
+                              labels = c(expression("To decrease ("*beta*")"),
+                                         expression("To remain ("*phi*")"),
+                                         expression("To increase ("*alpha*")"))),
+          NS = factor(NS, levels = c("Underweight", "Normal",
+                                     "Overweight", "Obese"),
+                      labels = c("1. Underweight", "2. Normal",
+                                 "3. Overweight", "4. Obese")),
+          Prob = as.numeric(Prob)) %>%
+  ggplot() +
+  geom_ribbon(aes(x = BMI,
+                  ymin = Min, ymax = Max,
+                  group = NS,
+                  fill = NS,
+                  colour = NS),
+              alpha = 0.2,
+              linetype = "dashed",
+              size = 1) +
+  geom_line(aes(x = BMI,
+                y = Prob,
+                group = Bound,
+                colour = NS),
+            show.legend = FALSE) +
+  facet_grid(Sex ~ Transition,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y",
+             labeller = label_parsed) +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 45, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Body mass index",
+       y = "Probability",
+       fill = "Nutritional status",
+       colour = "Nutritional status") +
+  scale_y_continuous(labels = scales::percent,
+                     breaks = c(seq(0, 1, 0.25),
+                                max(bounds$Max,
+                                    na.rm = TRUE))) +
+  scale_x_continuous(breaks = c(17, 18.5, 25, 30, 36)))
+
+ggsave("Document/Figures/LiteratureBounds_scenarios.png",
+       width = 30, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/LiteratureBounds_scenarios.tex",
+     width = 6.5,
+     height = 4.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_scenario
+
+dev.off()
+```
+
+```{r}
+# Discretize the bmi
+bounds = bmi_group(bounds)
+```
+
+```{r}
+### Export the scenarios
+library(xlsx)
+grid_handle = function(x, sex, transition, bound, scenario){
+  aux = x %>%
+    filter(Sex == sex, Transition == transition) %>%
+    dplyr::select(-c("NS", "Sex", "Transition",
+                     "BMI", "BMI_li", "BMI_ls",
+                     "Min", "Max")) %>%
+    gather(key = "Scenarios", value = "value", 
+           -group_bmi, factor_key = TRUE) %>%
+    separate(Scenarios, c("Bound", "Scenario")) %>%
+    filter(Bound == bound, Scenario == scenario) %>%
+    dplyr::select(-c("Bound", "Scenario")) %>%
+    group_by(group_bmi) %>%
+    # this avoids any null row and compute a zero instead
+    # replace(is.na(.), 0) %>%
+    summarise(prob = ifelse(bound == "li",
+                            min(value), max(value))) %>%
+    dplyr::select(-c("group_bmi")) %>%
+    # dustributes uniformly over the age
+    mutate(age_1 = prob/7, age_2 = prob/7, age_3 = prob/7,
+           age_4 = prob/7, age_5 = prob/7, age_6 = prob/7,
+           age_7 = prob/7) %>%
+    dplyr::select(-c("prob"))
+  # repeat the last non-zero rows to the zero rows
+  # such as the first and the last rows are zero
+  if (transition == "Decrease"){
+    aux[1,] = 0
+  } else{
+    if (transition == "Increase") {
+      aux[20,] = 0
+    }
+  }
+  return(aux)
+}
+
+# wb = createWorkbook()
+sexes = c("Men", "Women")
+transition = c("Decrease", "Remain", "Increase")
+limit = c("li", "ls")
+for (i in 1:length(sexes)) {
+  for (j in 1:scenarios) {
+    # sheet = createSheet(wb, paste0(sexes[i], "_", j))
+    for (k in 1:length(limit)) {
+      for (t in 1:length(transition)) {
+        grid_handle(bounds, sexes[i], transition[t], limit[k], j) %>%
+          write.table(paste0("Data/",sexes[i],"/Scenarios/",
+                             sexes[i],"_",j,"_",limit[k],"_",
+                             ifelse(transition[t] == "Decrease", "b",
+                                    ifelse(transition[t] == "Remain", "c", "a")),".txt"),
+                append = FALSE, sep = " ", dec = ".",
+                row.names = FALSE, col.names = FALSE)
+          # addDataFrame(sheet = sheet,
+          #              startColumn = 1+9*(k-1),
+          #              startRow = 1+22*(t-1),
+          #              row.names = TRUE)
+      }
+    }
+  }
+}
+# saveWorkbook(wb, "Data/Scenarios.xlsx")
+```
+
+```{r fig.height = 10, fig.width = 10, warning=FALSE, message=FALSE}
+p = rbind(grid_handle(bounds, "Women", "Decrease", "li", 1),
+          grid_handle(bounds, "Women", "Decrease", "ls", 1),
+          grid_handle(bounds, "Women", "Remain", "li", 1),
+          grid_handle(bounds, "Women", "Remain", "ls", 1),
+          grid_handle(bounds, "Women", "Increase", "li", 1),
+          grid_handle(bounds, "Women", "Increase", "ls", 1),
+          grid_handle(bounds, "Men", "Decrease", "li", 1),
+          grid_handle(bounds, "Men", "Decrease", "ls", 1),
+          grid_handle(bounds, "Men", "Remain", "li", 1),
+          grid_handle(bounds, "Men", "Remain", "ls", 1),
+          grid_handle(bounds, "Men", "Increase", "li", 1),
+          grid_handle(bounds, "Men", "Increase", "ls", 1)) %>%
+  mutate(BMI = rep(c(1:20), 12),
+         Bound = rep(c("lower", "upper"), times = 6, each = 20),
+         Transition = factor(rep(c("Decrease", "Remain", "Increase"),
+                                 times = 2, each = 40),
+                             levels = c("Increase", "Remain", "Decrease")),
+         Sex = factor(rep(c("Men", "Women"), each = length(BMI)/2))) %>%
+  gather(key = "Age", value = "Probability",
+         -BMI, -Bound, -Transition, -Sex,
+         factor_key = TRUE) %>%
+  separate(Age, c("aux", "Age")) %>%
+  dplyr::select(-c("aux")) %>%
+  ggplot(aes(x = Age, y = BMI,
+             fill = Probability)) +
+  geom_tile() +
+  facet_grid(Transition ~ Sex + Bound,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        legend.key.width = unit(4, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text.x = element_text(colour = "black",
+                                    size = 10),
+        strip.text.y = element_text(colour = "black",
+                                    size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Age",
+       y = "Body mass index",
+       fill = "Transition probability") +
+  scale_fill_gradient(low = "green", high = "red2",
+                      labels = scales::percent)
+
+# horizontal lines
+for (i in seq(0.5, 20.5, 1)) {
+    p = p + geom_segment(x = 0.5,
+                         xend = 7.5,
+                         y = i,
+                         yend = i)
+}
+# vertical lines
+for (i in seq(0.5, 7.5, 1)) {
+    p = p + geom_segment(x = i,
+                         xend = i,
+                         y = 0.5,
+                         yend = 20.5)
+}
+
+print(p)
+ggsave("Document/Figures/BoundsScenario1.png",
+       width = 30, height = 25, units = "cm")
+```

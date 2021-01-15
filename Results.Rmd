@@ -1,0 +1,1666 @@
+---
+title: "Modelling long-term obesity prevalence with poor data quality in developing countries: The case of  Chile"
+author:
+  - Luis Rojo-González^[Universitat Politècnica de Catalunya, luis.rojo.g@usach.cl]
+date: ""
+output:
+  pdf_document:
+    fig_caption: yes
+    toc: true # table of content true
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    highlight: haddock  # specifies the syntax highlighting style
+    # highlight: monochrome  # specifies the syntax highlighting style
+  header-includes:
+  - \usepackage{float}
+  - \usepackage{amsmath}
+  - \usepackage[spanish]{babel}
+  - \usepackage[utf8]{inputenc}
+  - \usepackage{natbib}
+  - \usepackage{booktabs}
+  - \usepackage{hyperref}
+  html_document:
+    df_print: paged
+params:
+  seed: 12345
+  conf: 0.95
+abstract: ""
+---
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r echo = FALSE}
+# Working directory
+setwd("~/Desktop/ThesisUPC")
+```
+
+```{r message = FALSE, warning = FALSE}
+# Libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+library(xtable)
+library(readr) #Lee archivos .txt
+library(readxl) #Lee archivos .xlsx
+library(tikzDevice)
+options(mc.cores = parallel::detectCores(),
+        tz="CA")
+```
+
+```{r}
+Experiments = read_excel("NLP/Experiments.xlsx", 
+                         range = "A2:K8")
+```
+
+```{r}
+Sex = c("Men", "Women")
+Age = c("15-24", "25-34", "35-44", "45-54",
+        "55-64", "65-74", "75+")
+Year = c(2003:2024)
+```
+
+```{r message=FALSE, warning=FALSE}
+Population_est = data.frame()
+for (i in 1:length(Sex)) {
+  for (j in 1:nrow(Experiments)) {
+    for (k in 1:length(Year)) {
+      Abrir = read_table2(paste("NLP/",Sex[i],"/Experiment_",j,
+                                "/PopulationYear/Population",Year[k],".txt",
+                                sep = ""),
+                          col_names = FALSE, skip = 1) %>%
+        filter(.[[1]] != ":" & .[[1]] != ";" & .[[1]] != "U[i,j,k]") %>%
+        dplyr::select(-c("X9")) %>%
+        apply(., 2, as.numeric) %>%
+        as.data.frame() %>%
+        mutate(X1 = X1 + 16,
+               Sex = Sex[i],
+               Year = Year[k],
+               Experiment = paste0(j,": ",Experiments$ens_init[j],"-",
+                                   Experiments$ens_obj[j]),
+               Period = ifelse(Year[k] %in% seq(min(Experiments$ens_init[j],
+                                                    Experiments$ens_obj[j]),
+                                                max(Experiments$ens_init[j],
+                                                    Experiments$ens_obj[j]), 1),
+                               "Fitting", ifelse(Year[k] <= 2017,
+                                                 "Validation", "Forecasting")),
+               Direction = Experiments$direction[j])
+      Population_est = rbind(Population_est, Abrir)
+    }
+  }
+}
+colnames(Population_est) = c("BMI", Age,
+                             colnames(Population_est)[9:ncol(Population_est)])
+```
+
+```{r message=FALSE, warning=FALSE}
+Population_real = data.frame()
+ENS = c(2003, 2010, 2017)
+for (i in 1:length(Sex)) {
+  for (j in 1:nrow(Experiments)) {
+    for (k in 1:length(ENS)) {
+      Abrir = read_table2(paste("NLP/",Sex[i],"/Experiment_",j,
+                                "/PopulationYear/Population",ENS[k],"real.txt",
+                                sep = ""),
+                          col_names = FALSE, skip = 1) %>%
+        filter(.[[1]] != ":" & .[[1]] != ";" & .[[1]] != paste0("pop[i,j,",k,"]")) %>%
+        dplyr::select(-c("X9")) %>%
+        apply(., 2, as.numeric) %>%
+        as.data.frame() %>%
+        mutate(X1 = X1 + 16,
+               Sex = Sex[i],
+               Year = ENS[k],
+               Experiment = "Actual",
+               Period = "Actual",
+               Direction = "Actual")
+      Population_real = rbind(Population_real, Abrir)
+    }
+  }
+}
+colnames(Population_real) = c("BMI", Age,
+                              colnames(Population_real)[9:ncol(Population_real)])
+```
+
+```{r}
+Population = rbind(Population_est, Population_real)
+```
+
+```{r}
+Population = Population %>%
+  mutate(NS = as.factor(ifelse(BMI <= 18, "1. Underweight",
+                               ifelse(BMI %in% 19:25, "2. Normal",
+                                      ifelse(BMI %in% 25:30, "3. Overweight",
+                                             "4. Obese")))),
+         BMI = as.factor(BMI),
+         Sex = factor(Sex, levels = c("Men", "Women")),
+         Year = as.factor(Year),
+         Experiment = as.factor(Experiment),
+         Period = factor(Period, levels = c("Actual", "Fitting",
+                                            "Validation", "Forecasting")),
+         Direction = as.factor(Direction))
+```
+
+\section{Population by BMI}
+
+```{r}
+Pop_large = Population  %>%
+  gather(key = Age, value = Population,
+         -BMI, -Sex, -Year, -Experiment,
+         -Period, -Direction, -NS,
+         factor_key = TRUE)
+```
+
+```{r}
+# aqui se considera el peso que tiene cada sexo en la poblacion
+Pop_bmi = Pop_large %>%
+  group_by(Year, Experiment, Period, Direction) %>%
+  mutate(Sub_total = sum(Population),
+         Prop = Population/Sub_total) %>%
+  ungroup() %>%
+  group_by(BMI, Sex, Year, Experiment, Period, Direction) %>%
+  dplyr::summarise(Mean = sum(Prop),
+                   Var = var(Prop)*(n()^2), # check this out
+                   size = n(),
+                   Li = max(Mean - qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0),
+                   Ls = max(Mean + qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0)) %>%
+  ungroup() %>%
+  mutate(NS = as.factor(ifelse((as.numeric(BMI)+16) <= 18, "1. Underweight",
+                               ifelse((as.numeric(BMI)+16) <= 25, "2. Normal",
+                                      ifelse((as.numeric(BMI)+16) <= 30, "3. Overweight",
+                                             "4. Obese")))))
+```
+
+```{r warning=FALSE}
+Pop_bmi_aux = Pop_bmi %>%
+  filter(Year %in% c(2003, 2010, 2017)) %>%
+  dplyr::select(-c("Period")) %>%
+  separate(col = Experiment,
+           into = c("Number", "Period"), sep = ": ",
+           remove = FALSE) %>%
+  separate(col = Period,
+           into = c("init", "obj"),
+           sep = "-") %>%
+  filter((as.numeric(Year)+2002) != as.numeric(init) |
+           is.na(init)) %>%
+  select(-c("Number", "init", "obj"))
+```
+
+```{r, fig.width = 10, fig.height = 8, fig.cap = "\\label{fig:figure1}Proportion of the population in each BMI with 95% confidence intervals throughout time.", message=FALSE, warning=FALSE}
+(plot_bmi_sex = Pop_bmi_aux %>%
+  ggplot() +
+  geom_vline(xintercept = as.factor(c(18, 25, 30)),
+             col = "darkgrey") +
+  geom_errorbar(data = Pop_bmi_aux %>%
+                  filter(Experiment != "Actual"),
+                aes(x = BMI, ymin = Li, ymax = Ls,
+                    # group = interaction(Year, Age),
+                    group = interaction(Experiment),
+                    col = Experiment),
+                show.legend = FALSE,
+                # alpha = 0.2,
+                linetype = 1,
+                size = 1) +
+   geom_point(data = Pop_bmi_aux %>%
+                filter(Experiment != "Actual"),
+              aes(x = BMI, y = Mean,
+                    # group = interaction(Year, Age),
+                    group = interaction(Experiment),
+                    col = Experiment),
+                show.legend = FALSE,
+                # alpha = 0.2,
+                linetype = 1,
+                size = 1) +
+  geom_line(data = Pop_bmi_aux %>%
+                filter(Experiment != "Actual"),
+            aes(x = BMI, y = Mean,
+                # group = interaction(Year, Age),
+                group = interaction(Experiment),
+                # linetype = Direction,
+                col = Experiment),
+            size = 1) +
+  geom_point(data = Pop_bmi_aux %>%
+                filter(Experiment == "Actual"),
+             aes(x = BMI, y = Mean,
+                 shape = NS,
+                 group = Year),
+             size = 1.8) +
+  facet_grid(Sex ~ Year,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  guides(col = guide_legend(override.aes = list(size = 2))) + #increase legend figures
+  labs(x = "Body mass index",
+       y = "Proportion of the population",
+       col = "Experiment",
+       shape = "Nutritional status") +
+  scale_x_discrete(breaks = as.factor(seq(18, 36, 2))) +
+  scale_y_continuous(labels = scales::percent(x = seq(from = 0,
+                                                      to = 0.06,
+                                                      by = 0.02),
+                                              accuracy = 1),
+                     breaks = seq(from = 0, to = 0.06, by = 0.02)))
+
+ggsave(file = "BMISex.png", path = "Document/Figures",
+       width = 30, height = 20, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/BMISex.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_bmi_sex
+
+dev.off()
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+Error_bmi = Pop_bmi %>%
+  filter(Year %in% c(2003, 2010, 2017)) %>%
+  dplyr::select(-c("Period","Direction","Var","size",
+                   "Li","Ls","NS")) %>%
+  spread(key = Experiment, value = Mean) %>%
+  gather(key = Experiment, value = "prop",
+         -BMI, -Sex, -Year, -Actual) %>%
+  group_by(Sex, Year, Experiment) %>%
+  summarise(Error = round(100*sum(abs(Actual-prop)), 2)) %>%
+  ungroup() %>%
+  unite(temp, Sex, Year) %>%
+  spread(key = temp, value = Error)
+  
+print(xtable(Error_bmi, digits = 2, label = "tab:error_bmi",
+             caption = "Total absolute error obtained considering the body mass indexes for each experiment by Sex and Year."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 6))
+```
+
+```{r}
+exp_fore = Error_bmi %>%
+  gather(key = Sex_year, value = error,
+         -Experiment) %>%
+  filter(error != 0) %>%
+  group_by(Experiment) %>%
+  summarise(min_error = min(error)) %>%
+  filter(min_error <= 100*(1-params$conf)) %>%
+  ungroup() %>%
+  select(c("Experiment")) %>%
+  as.vector()
+```
+
+```{r}
+Pop_ns = Pop_large %>%
+  group_by(Year, Experiment, Period, Direction, Age) %>%
+  mutate(Sub_total = sum(Population),
+         Prop = Population/Sub_total) %>%
+  ungroup() %>%
+  group_by(NS, Sex, Year, Experiment, Period, Direction, Age) %>%
+  dplyr::summarise(Mean = sum(Prop),
+                   Var = var(Prop)*(n()^2), # check this out
+                   size = n(),
+                   Li = max(Mean - qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0),
+                   Ls = max(Mean + qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0)) %>%
+  ungroup()
+```
+
+```{r}
+Pop_bmi_age = Pop_large %>%
+  group_by(Year, Experiment, Period, Direction, Age) %>%
+  mutate(Sub_total = sum(Population),
+         Prop = Population/Sub_total) %>%
+  ungroup() %>%
+  group_by(BMI, Sex, Year, Experiment, Period, Direction, Age) %>%
+  dplyr::summarise(Mean = sum(Prop),
+                   Var = var(Prop)*(n()^2), # check this out
+                   size = n(),
+                   Li = max(Mean - qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0),
+                   Ls = max(Mean + qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0)) %>%
+  ungroup() %>%
+  dplyr::select(c("BMI", "Year", "Sex", "Experiment",
+                  "Age", "Mean", "Li", "Ls")) %>%
+  separate(col = Experiment,
+           into = c("Number", "Period"), sep = ": ",
+           remove = FALSE,
+           fill = "left") %>%
+  separate(col = Period,
+           into = c("init", "obj"),
+           sep = "-",
+           fill = "left") %>%
+  filter((as.numeric(Year)+2002) != as.numeric(init) |
+           is.na(init)) %>%
+  dplyr::select(c("BMI", "Sex", "Year", "Experiment",
+                  "Age", "Mean", "Li", "Ls"))
+```
+
+\subsection{Results 2003}
+
+```{r}
+Pop_bmi_2003 = Pop_bmi_age %>%
+  filter(Year == 2003) %>%
+  dplyr::select(-c("Year")) %>%
+  mutate(Experiment = droplevels(Experiment))
+```
+
+```{r, fig.width = 10, fig.height = 6, fig.cap = "\\label{fig:figure1}Proportion of the population in each BMI with 95% confidence intervals throughout time.", message=FALSE, warning=FALSE}
+(plot_bmi_age_2003 = Pop_bmi_2003 %>%
+  ggplot() +
+  # geom_vline(xintercept = as.factor(c(18, 25, 30)),
+  #            col = "darkgrey") +
+  geom_errorbar(data = Pop_bmi_2003 %>%
+                  filter(Experiment != "Actual"),
+                aes(x = BMI, ymin = Li, ymax = Ls,
+                    # group = interaction(Year, Age),
+                    # group = interaction(Experiment),
+                    col = Experiment),
+                show.legend = FALSE,
+                # alpha = 0.2,
+                linetype = 1,
+                size = 1) +
+   geom_point(data = Pop_bmi_2003 %>%
+                filter(Experiment != "Actual"),
+              aes(x = BMI, y = Mean,
+                  # group = interaction(Year, Age),
+                  # group = interaction(Experiment),
+                  col = Experiment),
+              show.legend = FALSE,
+              # alpha = 0.2,
+              linetype = 1,
+              size = 1) +
+  geom_line(data = Pop_bmi_2003 %>%
+              filter(Experiment != "Actual"),
+            aes(x = BMI, y = Mean,
+                # group = interaction(Year, Age),
+                group = interaction(Experiment),
+                # linetype = Direction,
+                col = Experiment),
+            size = 1) +
+  geom_point(data = Pop_bmi_2003 %>%
+               filter(Experiment == "Actual"),
+             aes(x = BMI, y = Mean,
+                 # shape = NS,
+                 group = Age),
+             size = 1) +
+  facet_grid(Sex ~ Age,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  guides(col = guide_legend(override.aes = list(size = 2))) + #increase legend figures
+  labs(x = "Body mass index",
+       y = "Proportion of the population",
+       col = "Experiment",
+       shape = "Nutritional status",
+       title = "2003") +
+  scale_x_discrete(breaks = as.factor(seq(18, 36, 6))) +
+  scale_y_continuous(labels = scales::percent(x = seq(from = 0,
+                                                      to = 0.12,
+                                                      by = 0.04),
+                                              accuracy = 1),
+                     breaks = seq(from = 0, to = 0.12, by = 0.04)))
+
+ggsave(file = "BMISexAge2003.png", path = "Document/Figures",
+       width = 30, height = 20, units = "cm")
+```
+
+```{r}
+# save as tikz files
+tikz(file = "Document/Figures/BMISexAge2003.tex",
+     width = 6.5,
+     height = 4.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_bmi_age_2003
+
+dev.off()
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+cvm_exp_pvalue = function(bmi, actual, fitted) {
+  set.seed(params$seed)
+  cvm.test(x = rep(x = bmi, times = actual) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer(),
+         y = rep(x = bmi, times = fitted) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer() %>%
+           ecdf(),
+         simulate.p.value = FALSE, type = "W2") %>%
+    unlist() %>% .[["p.value"]] %>%
+    as.numeric()
+}
+
+cvm_test_2003 = Pop_bmi_2003 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = round(Mean*1000000)) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = cvm_exp_pvalue(.[[1]], .[[4]], .[[8]]),
+            b = cvm_exp_pvalue(.[[1]], .[[5]], .[[8]]),
+            c = cvm_exp_pvalue(.[[1]], .[[6]], .[[8]]),
+            d = cvm_exp_pvalue(.[[1]], .[[7]], .[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = pvalue,
+         -Sex, -Age) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2003$Experiment)[1:4], times = 2))
+
+print(xtable(cvm_test_2003, digits = 2, label = "tab:cvm_2003",
+             caption = "Crámer-von Mises goodness-of-fit test for those experiments whose starting year is not 2003."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+chi_2003 = Pop_bmi_2003 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = Mean*100) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = sum(((.[[4]]-.[[8]])^2)/.[[8]]),
+            b = sum(((.[[5]]-.[[8]])^2)/.[[8]]),
+            c = sum(((.[[6]]-.[[8]])^2)/.[[8]]),
+            d = sum(((.[[7]]-.[[8]])^2)/.[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = chi_obs, factor_key = TRUE,
+         -Sex, -Age) %>%
+  mutate(pvalue = pchisq(q = chi_obs, df = 20-2-1, lower.tail = FALSE)) %>%
+  select(c("Sex", "Age", "pvalue", "Experiment")) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2003$Experiment)[1:4], times = 2))
+
+print(xtable(chi_2003, digits = 2, label = "tab:chi_2003",
+             caption = "chi-squared goodness-of-fit test for those experiments whose starting year is not 2003."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+error_2003 = Pop_bmi_2003 %>%
+  dplyr::select(-c("Li", "Ls")) %>%
+  spread(Experiment, Mean) %>%
+  gather(key = Experiment, value = Mean, factor_key = TRUE,
+         -BMI, -Sex, -Age, -Actual) %>%
+  group_by(Sex, Experiment, Age) %>%
+  summarise(error = sum(abs(Mean-Actual))) %>%
+  spread(Age, error)
+
+print(xtable(error_2003, digits = 2, label = "tab:error_2003",
+             caption = "Total absolute error for those experiments whose starting year is not 2003."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+res_2003 = bind_rows(cvm_test_2003 %>%
+            mutate(test = "cvm"),
+          chi_2003 %>%
+            mutate(test = "chi"),
+          error_2003 %>%
+            mutate(test = "error")) %>%
+  gather(key = Age, value = pvalue, factor_key = TRUE,
+         -Sex, -Experiment, -test) %>%
+  spread(test, pvalue) %>%
+  mutate(error = round(error, 2),
+         signif = ifelse(chi >= 1-params$conf & cvm >= 1-params$conf,
+                         paste0(error, "$^{*,+}$"),
+                         ifelse(chi >= 1-params$conf,
+                                paste0(error, "$^*$"),
+                                ifelse(cvm >= 1-params$conf,
+                                       paste0(error, "$^+$"), error)))) %>%
+  dplyr::select(c("Sex", "Experiment", "Age", "signif")) %>%
+  spread(Age, signif)
+
+print(xtable(res_2003, digits = 2, label = "tab:res_2003",
+             caption = "Obtained results for those experiments whose starting year is not 2003."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8),
+      sanitize.text.function = function(x) {x})
+```
+
+\subsection{Results 2010}
+
+```{r}
+Pop_bmi_2010 = Pop_bmi_age %>%
+  filter(Year == 2010) %>%
+  dplyr::select(-c("Year")) %>%
+  mutate(Experiment = droplevels(Experiment))
+```
+
+```{r, fig.width = 10, fig.height = 6, fig.cap = "\\label{fig:figure1}Proportion of the population in each BMI with 95% confidence intervals throughout time.", message=FALSE, warning=FALSE}
+(plot_bmi_age_2010 = Pop_bmi_2010 %>%
+  ggplot() +
+  # geom_vline(xintercept = as.factor(c(18, 25, 30)),
+  #            col = "darkgrey") +
+  geom_errorbar(data = Pop_bmi_2010 %>%
+                  filter(Experiment != "Actual"),
+                aes(x = BMI, ymin = Li, ymax = Ls,
+                    # group = interaction(Year, Age),
+                    # group = interaction(Experiment),
+                    col = Experiment),
+                show.legend = FALSE,
+                # alpha = 0.2,
+                linetype = 1,
+                size = 1) +
+   geom_point(data = Pop_bmi_2010 %>%
+                filter(Experiment != "Actual"),
+              aes(x = BMI, y = Mean,
+                  # group = interaction(Year, Age),
+                  # group = interaction(Experiment),
+                  col = Experiment),
+              show.legend = FALSE,
+              # alpha = 0.2,
+              linetype = 1,
+              size = 1) +
+  geom_line(data = Pop_bmi_2010 %>%
+              filter(Experiment != "Actual"),
+            aes(x = BMI, y = Mean,
+                # group = interaction(Year, Age),
+                group = interaction(Experiment),
+                # linetype = Direction,
+                col = Experiment),
+            size = 1) +
+  geom_point(data = Pop_bmi_2010 %>%
+               filter(Experiment == "Actual"),
+             aes(x = BMI, y = Mean,
+                 # shape = NS,
+                 group = Age),
+             size = 1) +
+  facet_grid(Sex ~ Age,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  guides(col = guide_legend(override.aes = list(size = 2))) + #increase legend figures
+  labs(x = "Body mass index",
+       y = "Proportion of the population",
+       col = "Experiment",
+       shape = "Nutritional status",
+       title = "2010") +
+  scale_x_discrete(breaks = as.factor(seq(18, 36, 6))) +
+  scale_y_continuous(labels = scales::percent(x = seq(from = 0,
+                                                      to = 0.06,
+                                                      by = 0.02),
+                                              accuracy = 1),
+                     breaks = seq(from = 0, to = 0.06, by = 0.02)))
+
+ggsave(file = "BMISexAge2010.png", path = "Document/Figures",
+       width = 30, height = 20, units = "cm")
+```
+
+```{r}
+# save as tikz files
+tikz(file = "Document/Figures/BMISexAge2010.tex",
+     width = 6.5,
+     height = 4.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_bmi_age_2010
+
+dev.off()
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+cvm_exp_pvalue = function(bmi, actual, fitted) {
+  set.seed(params$seed)
+  cvm.test(x = rep(x = bmi, times = actual) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer(),
+         y = rep(x = bmi, times = fitted) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer() %>%
+           ecdf(),
+         simulate.p.value = FALSE, type = "W2") %>%
+    unlist() %>% .[["p.value"]] %>%
+    as.numeric()
+}
+
+cvm_test_2010 = Pop_bmi_2010 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = round(Mean*1000000)) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = cvm_exp_pvalue(.[[1]], .[[4]], .[[8]]),
+            b = cvm_exp_pvalue(.[[1]], .[[5]], .[[8]]),
+            c = cvm_exp_pvalue(.[[1]], .[[6]], .[[8]]),
+            d = cvm_exp_pvalue(.[[1]], .[[7]], .[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = pvalue,
+         -Sex, -Age) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2010$Experiment)[1:4], times = 2))
+
+print(xtable(cvm_test_2010, digits = 2, label = "tab:cvm_2010",
+             caption = "Crámer-von Mises goodness-of-fit test for those experiments whose starting year is not 2010."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+chi_2010 = Pop_bmi_2010 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = Mean*100) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = sum(((.[[4]]-.[[8]])^2)/.[[8]]),
+            b = sum(((.[[5]]-.[[8]])^2)/.[[8]]),
+            c = sum(((.[[6]]-.[[8]])^2)/.[[8]]),
+            d = sum(((.[[7]]-.[[8]])^2)/.[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = chi_obs, factor_key = TRUE,
+         -Sex, -Age) %>%
+  mutate(pvalue = pchisq(q = chi_obs, df = 20-2-1, lower.tail = FALSE)) %>%
+  select(c("Sex", "Age", "pvalue", "Experiment")) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2010$Experiment)[1:4], times = 2))
+
+print(xtable(chi_2010, digits = 2, label = "tab:chi_2010",
+             caption = "chi-squared goodness-of-fit test for those experiments whose starting year is not 2010."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+error_2010 = Pop_bmi_2010 %>%
+  dplyr::select(-c("Li", "Ls")) %>%
+  spread(Experiment, Mean) %>%
+  gather(key = Experiment, value = Mean, factor_key = TRUE,
+         -BMI, -Sex, -Age, -Actual) %>%
+  group_by(Sex, Experiment, Age) %>%
+  summarise(error = sum(abs(Mean-Actual))) %>%
+  spread(Age, error)
+
+print(xtable(error_2010, digits = 2, label = "tab:error_2010",
+             caption = "Total absolute error for those experiments whose starting year is not 2010."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+res_2010 = bind_rows(cvm_test_2010 %>%
+            mutate(test = "cvm"),
+          chi_2010 %>%
+            mutate(test = "chi"),
+          error_2010 %>%
+            mutate(test = "error")) %>%
+  gather(key = Age, value = pvalue, factor_key = TRUE,
+         -Sex, -Experiment, -test) %>%
+  spread(test, pvalue) %>%
+  mutate(error = round(error, 2),
+         signif = ifelse(chi >= 1-params$conf & cvm >= 1-params$conf,
+                         paste0(error, "$^{*,+}$"),
+                         ifelse(chi >= 1-params$conf,
+                                paste0(error, "$^*$"),
+                                ifelse(cvm >= 1-params$conf,
+                                       paste0(error, "$^+$"), error)))) %>%
+  dplyr::select(c("Sex", "Experiment", "Age", "signif")) %>%
+  spread(Age, signif)
+
+print(xtable(res_2010, digits = 2, label = "tab:res_2010",
+             caption = "Obtained results for those experiments whose starting year is not 2010."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8),
+      sanitize.text.function = function(x) {x})
+```
+
+\subsection{Results 2017}
+
+```{r}
+Pop_bmi_2017 = Pop_bmi_age %>%
+  filter(Year == 2017) %>%
+  dplyr::select(-c("Year")) %>%
+  mutate(Experiment = droplevels(Experiment))
+```
+
+```{r, fig.width = 10, fig.height = 6, fig.cap = "\\label{fig:figure1}Proportion of the population in each BMI with 95% confidence intervals throughout time.", message=FALSE, warning=FALSE}
+(plot_bmi_age_2017 = Pop_bmi_2017 %>%
+  ggplot() +
+  # geom_vline(xintercept = as.factor(c(18, 25, 30)),
+  #            col = "darkgrey") +
+  geom_errorbar(data = Pop_bmi_2017 %>%
+                  filter(Experiment != "Actual"),
+                aes(x = BMI, ymin = Li, ymax = Ls,
+                    # group = interaction(Year, Age),
+                    # group = interaction(Experiment),
+                    col = Experiment),
+                show.legend = FALSE,
+                # alpha = 0.2,
+                linetype = 1,
+                size = 1) +
+   geom_point(data = Pop_bmi_2017 %>%
+                filter(Experiment != "Actual"),
+              aes(x = BMI, y = Mean,
+                  # group = interaction(Year, Age),
+                  # group = interaction(Experiment),
+                  col = Experiment),
+              show.legend = FALSE,
+              # alpha = 0.2,
+              linetype = 1,
+              size = 1) +
+  geom_line(data = Pop_bmi_2017 %>%
+              filter(Experiment != "Actual"),
+            aes(x = BMI, y = Mean,
+                # group = interaction(Year, Age),
+                group = interaction(Experiment),
+                # linetype = Direction,
+                col = Experiment),
+            size = 1) +
+  geom_point(data = Pop_bmi_2017 %>%
+               filter(Experiment == "Actual"),
+             aes(x = BMI, y = Mean,
+                 # shape = NS,
+                 group = Age),
+             size = 1) +
+  facet_grid(Sex ~ Age,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  guides(col = guide_legend(override.aes = list(size = 2))) + #increase legend figures
+  labs(x = "Body mass index",
+       y = "Proportion of the population",
+       col = "Experiment",
+       shape = "Nutritional status",
+       title = "2017") +
+  scale_x_discrete(breaks = as.factor(seq(18, 36, 6))) +
+  scale_y_continuous(labels = scales::percent(x = seq(from = 0,
+                                                      to = 0.1,
+                                                      by = 0.02),
+                                              accuracy = 1),
+                     breaks = seq(from = 0, to = 0.1, by = 0.02)))
+
+ggsave(file = "BMISexAge2017.png", path = "Document/Figures",
+       width = 30, height = 20, units = "cm")
+```
+
+```{r}
+# save as tikz files
+tikz(file = "Document/Figures/BMISexAge2017.tex",
+     width = 6.5,
+     height = 4.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_bmi_age_2017
+
+dev.off()
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+cvm_exp_pvalue = function(bmi, actual, fitted) {
+  set.seed(params$seed)
+  cvm.test(x = rep(x = bmi, times = actual) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer(),
+         y = rep(x = bmi, times = fitted) %>%
+           sample(x = ., size = 10000, replace = TRUE) %>% as.integer() %>%
+           ecdf(),
+         simulate.p.value = FALSE, type = "W2") %>%
+    unlist() %>% .[["p.value"]] %>%
+    as.numeric()
+}
+
+cvm_test_2017 = Pop_bmi_2017 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = round(Mean*1000000)) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = cvm_exp_pvalue(.[[1]], .[[4]], .[[8]]),
+            b = cvm_exp_pvalue(.[[1]], .[[5]], .[[8]]),
+            c = cvm_exp_pvalue(.[[1]], .[[6]], .[[8]]),
+            d = cvm_exp_pvalue(.[[1]], .[[7]], .[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = pvalue,
+         -Sex, -Age) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2017$Experiment)[1:4], times = 2))
+
+print(xtable(cvm_test_2017, digits = 2, label = "tab:cvm_2017",
+             caption = "Crámer-von Mises goodness-of-fit test for those experiments whose starting year is not 2017."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+chi_2017 = Pop_bmi_2017 %>%
+  dplyr::select(c("BMI", "Experiment", "Sex",
+                  "Age", "Mean")) %>%
+  mutate(Mean = Mean*100) %>%
+  spread(Experiment, Mean) %>%
+  group_by(Sex, Age) %>%
+  summarise(a = sum(((.[[4]]-.[[8]])^2)/.[[8]]),
+            b = sum(((.[[5]]-.[[8]])^2)/.[[8]]),
+            c = sum(((.[[6]]-.[[8]])^2)/.[[8]]),
+            d = sum(((.[[7]]-.[[8]])^2)/.[[8]])) %>%
+  ungroup() %>%
+  gather(key = Experiment, value = chi_obs, factor_key = TRUE,
+         -Sex, -Age) %>%
+  mutate(pvalue = pchisq(q = chi_obs, df = 20-2-1, lower.tail = FALSE)) %>%
+  select(c("Sex", "Age", "pvalue", "Experiment")) %>%
+  spread(Age, pvalue) %>%
+  mutate(Experiment = rep(levels(Pop_bmi_2017$Experiment)[1:4], times = 2))
+
+print(xtable(chi_2017, digits = 2, label = "tab:chi_2017",
+             caption = "chi-squared goodness-of-fit test for those experiments whose starting year is not 2017."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+error_2017 = Pop_bmi_2017 %>%
+  dplyr::select(-c("Li", "Ls")) %>%
+  spread(Experiment, Mean) %>%
+  gather(key = Experiment, value = Mean, factor_key = TRUE,
+         -BMI, -Sex, -Age, -Actual) %>%
+  group_by(Sex, Experiment, Age) %>%
+  summarise(error = sum(abs(Mean-Actual))) %>%
+  spread(Age, error)
+
+print(xtable(error_2017, digits = 2, label = "tab:error_2017",
+             caption = "Total absolute error for those experiments whose starting year is not 2017."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+res_2017 = bind_rows(cvm_test_2017 %>%
+            mutate(test = "cvm"),
+          chi_2017 %>%
+            mutate(test = "chi"),
+          error_2017 %>%
+            mutate(test = "error")) %>%
+  gather(key = Age, value = pvalue, factor_key = TRUE,
+         -Sex, -Experiment, -test) %>%
+  spread(test, pvalue) %>%
+  mutate(error = round(error, 2),
+         signif = ifelse(chi >= 1-params$conf & cvm >= 1-params$conf,
+                         paste0(error, "$^{*,+}$"),
+                         ifelse(chi >= 1-params$conf,
+                                paste0(error, "$^*$"),
+                                ifelse(cvm >= 1-params$conf,
+                                       paste0(error, "$^+$"), error)))) %>%
+  dplyr::select(c("Sex", "Experiment", "Age", "signif")) %>%
+  spread(Age, signif)
+
+print(xtable(res_2017, digits = 2, label = "tab:res_2017",
+             caption = "Obtained results for those experiments whose starting year is not 2017."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 4, 8),
+      sanitize.text.function = function(x) {x})
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+Error_ns = Pop_large %>%
+  group_by(Year, Experiment, Period, Direction) %>%
+  mutate(Sub_total = sum(Population),
+         Prop = Population/Sub_total) %>%
+  ungroup() %>%
+  group_by(NS, Sex, Year, Experiment, Period, Direction) %>%
+  dplyr::summarise(Mean = sum(Prop),
+                   Var = var(Prop)*(n()^2), # check this out
+                   size = n(),
+                   Li = max(Mean - qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0),
+                   Ls = max(Mean + qnorm(1-(1-params$conf)/2)*sqrt(Var/size), 0)) %>%
+  ungroup() %>%
+  filter(Year %in% c(2003, 2010, 2017)) %>%
+  dplyr::select(-c("Period","Direction","Var","size",
+                   "Li","Ls")) %>%
+  spread(key = Experiment, value = Mean) %>%
+  gather(key = Experiment, value = "prop",
+         -NS, -Sex, -Year, -Actual) %>%
+  group_by(Sex, Year, Experiment) %>%
+  summarise(Error = round(100*sum(abs(Actual-prop)), 2)) %>%
+  ungroup() %>%
+  unite(temp, Sex, Year) %>%
+  spread(key = temp, value = Error)
+  
+print(xtable(Error_ns, digits = 2, label = "tab:error_ns",
+             caption = "Total absolute error obtained considering the nutritional status for each experiment by Sex and Year."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 6))
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+Error = rbind(Error_bmi %>%
+                mutate(type = "BMI"),
+              Error_ns %>%
+                mutate(type = "NS")) %>%
+  gather(key = class, value = "Error",
+         -Experiment, -type) %>%
+  mutate(type = factor(type, levels = c("BMI", "NS"))) %>%
+  # spread(key = type, value = Error) %>%
+  unite(temp, class, type, sep = "_") %>%
+  spread(key = temp, value = Error)
+
+print(xtable(Error, digits = 2, label = "tab:error",
+             caption = "Total absolute error obtained considering the body mass indexes - nutritional statuses (BMI-NS) for each experiment by Sex and Year."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 6))
+```
+
+```{r}
+Pop_ns_aux = Pop_ns %>%
+  select(-c("Period", "Direction", "Var", "size")) %>%
+  filter(Year %in% c(2003, 2010, 2017, 2024),
+         Experiment %in% c("Actual",
+                           "1: 2003-2010",
+                           "2: 2003-2017")) %>%
+  filter((Year == 2003 & Experiment == "Actual") |
+           (Year == 2010 & Experiment == "Actual") |
+           (Year == 2017 & Experiment == "Actual") |
+           Year == 2024)
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+Pop_ns_2024 = Pop_ns_aux %>%
+  filter(Year == 2024) %>%
+  select(c("Sex", "NS", "Age", "Mean",
+           "Li", "Ls", "Experiment")) %>%
+  mutate(Mean = sprintf("%0.1f", round(100*Mean, 2)),
+         Li = sprintf("%0.1f", round(100*Li, 2)),
+         Ls = sprintf("%0.1f", round(100*Ls, 2))) %>%
+  mutate(z = paste0("(", Li, "-", Ls, ")")) %>%
+  select(-c("Li", "Ls")) %>%
+  unite(pred, Mean, z, sep = " ") %>%
+  unite(temp, Sex, Experiment) %>%
+  spread(temp, pred)
+
+print(xtable(Pop_ns_2024, digits = 2, label = "tab:ns2024",
+             caption = "Predicted proportion of the population, in percent, with 95% confidence intervals (in parenthesis) in each Experiment for each Nutritional status and Age range, by Sex. Notice that the notation in the first column denotes the combination of Nutritional status and Experiment in that order, i.e. ``Nutritional status; Experiment''."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, seq(7, 28, 7)))
+```
+
+```{r, fig.width = 10, fig.height = 8, fig.cap = "\\label{fig:figure2}Proportion of the population in each NS and Age with 95% confidence intervals throughout time.", message=FALSE, warning=FALSE}
+(plot_ns_2024 = ggplot() +
+  geom_bar(data = Pop_ns_aux %>%
+              filter(Year == 2017) %>%
+              mutate(Experiment = NULL),
+           aes(x = NS,
+               y = Mean,
+               group = interaction(Year)),
+           col = "black",
+           fill = "black",
+           stat = "identity",
+           show.legend = FALSE) +
+  geom_errorbar(data = Pop_ns_aux %>%
+                 filter(Year == 2024),
+                aes(x = NS,
+                    ymin = Li,
+                    ymax = Ls,
+                    col = Experiment,
+                    group = interaction(Experiment)),
+                # col = "black",
+                width = 0.5,
+                alpha = 1.5,
+                show.legend = FALSE) +
+  geom_line(data = Pop_ns_aux %>%
+                 filter(Year == 2024),
+            aes(x = NS,
+                y = Mean,
+                col = Experiment,
+                group = interaction(Experiment))) +
+  geom_point(data = Pop_ns_aux %>%
+               filter(Year == 2024),
+             aes(x = NS, y = Mean,
+                 col = Experiment,
+                 group = interaction(Experiment)),
+             size = 1,
+             show.legend = FALSE) +
+  facet_grid(Sex ~ Age,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  ylim(c(0, 0.4)) +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 90, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  guides(col = guide_legend(override.aes = list(size = 2.5))) +
+  labs(x = "",
+       y = "Proportion of the population",
+       col = "Experiment") +
+  scale_y_continuous(labels = scales::percent(x = c(0.35, seq(from = 0,
+                                                              to = 0.4,
+                                                              by = 0.1)),
+                                              accuracy = 1),
+                     breaks = c(0.35, seq(from = 0, to = 0.4, by = 0.1))))
+
+ggsave(file = "NSSexAge.png", path = "Document/Figures",
+       width = 30, height = 25, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/NSSexAge.tex",
+     width = 6.5,
+     height = 4.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_ns_2024
+
+dev.off()
+```
+
+```{r results = 'asis', warning=FALSE, message=FALSE}
+library(xtable)
+Pop_ns_aux_real = Pop_ns %>%
+  filter(Year %in% c(2003, 2010, 2017),
+         Experiment == "Actual") %>%
+  select(c("Sex", "NS", "Year", "Age", "Mean")) %>%
+  mutate(Mean = round(100*Mean, 2)) %>%
+  spread(key = Age, value = Mean) #%>%
+  # filter(Sex == "Men") %>%
+  # select(-c("Sex"))
+
+print(xtable(Pop_ns_aux_real,
+             digits = 2, label = "tab:ns",
+             caption = "Proportion of the population, in percent, in each combination of nutritional status and age range by sex throughout time when data is collected."),
+      caption.placement = "top",
+      comment = FALSE,
+      include.rownames = FALSE,
+      include.colnames = TRUE,
+      hline.after = c(-1, 0, 12))
+```
+
+```{r, fig.width = 10, fig.height = 8, fig.cap = "\\label{fig:figure3}Proportion of the population in each NS and Age throughout time at each year when the data is collected.", message=FALSE, warning=FALSE}
+(plot_ns_2017 = Pop_ns_aux_real %>%
+  gather(key = Age, value = Mean,
+         -Sex, -NS, -Year) %>%
+  # group_by(Sex, Year, Age) %>%
+  mutate(Mean = Mean/100) %>%
+  # ungroup()
+  ggplot() +
+  geom_bar(aes(x = Year,
+               y = Mean,
+               group = interaction(NS),
+               fill = NS),
+           col = "black",
+           # fill = "black",
+           stat = "identity",
+           show.legend = TRUE,
+           position = position_fill(reverse = TRUE)) +
+  geom_label(aes(x = Year,
+                 y = Mean,
+                 label = sprintf("%0.1f",
+                                 round(100*Mean, 1))),
+             # stat = 'bin',
+             # direction = "y",
+             size = 10/4,
+             box.padding = unit(0.01, "cm"),
+             label.padding = unit(0.05, "cm"),
+             position = position_fill()) +
+  facet_grid(Sex ~ Age,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y") +
+  scale_y_continuous(labels = scales::percent,
+                     breaks = seq(from = 0, to = 1, by = 0.2)) +
+  # scale_x_discrete(breaks = c(17, 20, 25, 30, 36)) +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 90, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "bottom",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "",
+       y = "Proportion of the population",
+       fill = "Nutritional status"))
+
+ggsave(file = "NSActual.png", path = "Document/Figures",
+       width = 30, height = 25, units = "cm")
+```
+
+```{r}
+tikz(file = "Document/Figures/NSActual.tex",
+     width = 6.5,
+     height = 5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+plot_ns_2017
+
+dev.off()
+```
+
+```{r message=FALSE, warning=FALSE}
+###### ---- Trends ----
+Trend = data.frame()
+Time = data.frame()
+for (i in 1:length(Sex)) {
+  for (j in 1:nrow(Experiments)) {
+    Abrir = read_table2(paste("NLP/",Sex[i],"/Experiment_",j,
+                              "/Results/trend.txt",
+                              sep = ""),
+                        col_names = FALSE, skip = 1) %>%
+      filter(.[[1]] != ":" & .[[1]] != ";") %>%
+      apply(., 2, as.numeric) %>%
+      as.data.frame() %>%
+      mutate(X1 = as.factor(X1 + 16),
+             X2 = as.factor(Age[.[[2]]]),
+             Sex = as.factor(Sex[i]),
+             Experiment = as.factor(paste0(j,": ",Experiments$ens_init[j],"-",
+                                           Experiments$ens_obj[j])))
+    Trend = rbind(Trend, Abrir)
+    
+    Abri2 = read_delim(paste0("NLP/",Sex[i],"/Experiment_",j,
+                              "/Results/Time.txt"),
+                       "=", escape_double = FALSE, col_names = FALSE,
+                       trim_ws = TRUE) %>%
+      mutate(Sex = Sex[i])
+    Time = rbind(Time, Abri2)
+  }
+}
+
+colnames(Trend) = c("BMI", "Age", "Increase",
+                    "Decrease", "Remain", "Sex",
+                    "Experiment")
+
+(Total_time = Time %>%
+    group_by(Sex) %>%
+    summarise(X2 = sum(X2)/60))
+```
+
+```{r}
+Trend_large = Trend %>%
+  gather(key = Transition, value = "Probability",
+         -BMI, -Age, -Sex, -Experiment) %>%
+  mutate(Transition = factor(Transition,
+                             levels = c("Decrease",
+                                        "Remain",
+                                        "Increase"))) %>%
+  filter(Experiment %in% c("1: 2003-2010",
+                           "2: 2003-2017")) %>%#,
+                           # "3: 2010-2017")) %>%
+  group_by(BMI, Age, Sex, Experiment, Transition) %>%
+  summarise(Mean = mean(Probability),
+            SD = sd(Probability)) %>%
+  ungroup() %>%
+  gather(key = Statistic, value = "Probability",
+         -BMI, -Age, -Sex, -Experiment, -Transition) %>%
+  filter(Statistic == "Mean")
+```
+
+```{r, fig.width = 10, fig.height = 8, fig.cap = "\\label{fig:trend_men}Distribution of the transition probabilities according to combination of Body mass index and Age group in each scenario, for Men.", message=FALSE, warning=FALSE}
+p_men = Trend_large %>%
+  filter(Sex == "Men") %>%
+  mutate(Transition = factor(Transition,
+                              levels = c("Decrease", "Remain", "Increase"),
+                              labels = c(expression("To decrease ("*beta*")"),
+                                         expression("To remain ("*phi*")"),
+                                         expression("To increase ("*alpha*")")))) %>%
+  ggplot(aes(x = Age, y = BMI,
+             fill = Probability)) +
+  geom_tile() +
+  geom_text(aes(x = Age,
+                y = BMI,
+                label = ifelse(sprintf("%0.1f",
+                                       round(100*Probability, 1)) != 0,
+                               sprintf("%0.1f",
+                                       round(100*Probability, 1)), NULL)),
+            size = 10*5/16) + # /14 to get 10pt
+  facet_grid(Experiment ~ Transition,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y",
+             labeller = label_parsed) +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 90, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "none",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Age",
+       y = "Body mass index",
+       fill = "Probability",
+       title = "Men") +
+  scale_fill_gradient(low = "green", high = "red2",
+                      labels = scales::percent)
+
+# horizontal lines
+for (i in seq(0.5, 20.5, 1)) {
+    p_men = p_men + geom_segment(x = 0.5,
+                                 xend = 7.5,
+                                 y = i,
+                                 yend = i)
+}
+# vertical lines
+for (i in seq(0.5, 7.5, 1)) {
+    p_men = p_men + geom_segment(x = i,
+                                 xend = i,
+                                 y = 0.5,
+                                 yend = 20.5)
+}
+
+# p_men = p_men +
+#   geom_hline(yintercept = c(2.5, 9.5, 14.5, 20.5),
+#              col = "darkgrey",
+#              size = 1)
+
+print(p_men)
+
+ggsave(file = "Trend_men.png", path = "Document/Figures",
+       width = 30, height = 25, units = "cm")
+```
+
+```{r, fig.width = 10, fig.height = 8, fig.cap = "\\label{fig:trend_men}Distribution of the transition probabilities according to combination of Body mass index and Age group in each scenario, for Women.", message=FALSE, warning=FALSE}
+p_women = Trend_large %>%
+  filter(Sex == "Women") %>%
+  mutate(Transition = factor(Transition,
+                              levels = c("Decrease", "Remain", "Increase"),
+                              labels = c(expression("To decrease ("*beta*")"),
+                                         expression("To remain ("*phi*")"),
+                                         expression("To increase ("*alpha*")")))) %>%
+  ggplot(aes(x = Age, y = BMI,
+             fill = Probability)) +
+  geom_tile() +
+  geom_text(aes(x = Age,
+                y = BMI,
+                label = ifelse(sprintf("%0.1f",
+                                       round(100*Probability, 1)) != 0,
+                               sprintf("%0.1f",
+                                       round(100*Probability, 1)), NULL)),
+            size = 10*5/16) + # /14 to get 10pt
+  facet_grid(Experiment ~ Transition,
+             scales = "fixed",
+             space = "fixed",
+             switch = "y",
+             labeller = label_parsed) +
+  theme_bw() +
+  theme(plot.title = element_text(colour = "black",
+                                  size = 10),
+        axis.text.x = element_text(angle = 90, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        axis.text.y = element_text(angle = 0, # whether to show the lines on
+                                   hjust = 0.5, # the axis
+                                   vjust = 0.5,
+                                   colour = "black",
+                                   size = 10),
+        # axis.ticks.x = element_blank(),
+        # axis.ticks.y = element_blank(), # to control the appearance
+        panel.margin = unit(1, "lines"), # space around the panel in grid
+        legend.margin = margin(2, 2, 2, 2), # space around the legend box
+        legend.position = "none",     # of the plot
+        # legend.key.width = unit(3.9, "cm"), # length of the legend
+        legend.box = "vertical",
+        legend.spacing = unit(0.2, "lines"),
+        legend.box.margin = margin(-8, 0, 0, 0), #top, right, bottom, left
+        legend.background = element_rect(fill = "white",
+                                         size = 0.5,
+                                         linetype = "solid",
+                                         colour = "black"),
+        legend.text = element_text(colour = "black",
+                                   size = 10),
+        legend.title = element_text(colour = "black",
+                                    size = 10),
+        strip.text = element_text(colour = "black",
+                                  size = 10),
+        plot.margin = unit(c(0.5, 0.5, 0, 0.5), "cm")) + #top, right, bottom, left
+  labs(x = "Age",
+       y = "Body mass index",
+       fill = "Probability",
+       title = "Women") +
+  scale_fill_gradient(low = "green", high = "red2",
+                      labels = scales::percent)
+
+# horizontal lines
+for (i in seq(0.5, 20.5, 1)) {
+    p_women = p_women + geom_segment(x = 0.5,
+                                     xend = 7.5,
+                                     y = i,
+                                     yend = i)
+}
+# vertical lines
+for (i in seq(0.5, 7.5, 1)) {
+    p_women = p_women + geom_segment(x = i,
+                                     xend = i,
+                                     y = 0.5,
+                                     yend = 20.5)
+}
+
+# p_women = p_women +
+#   geom_hline(yintercept = c(2.5, 9.5, 14.5, 20.5),
+#              col = "darkgrey",
+#              size = 1)
+
+print(p_women)
+
+ggsave(file = "Trend_women.png", path = "Document/Figures",
+       width = 30, height = 25, units = "cm")
+```
+
+```{r, fig.width = 10, fig.height = 15, fig.cap = "\\label{fig:trend_men}Distribution of the transition probabilities according to combination of Body mass index and Age group in each scenario.", message=FALSE, warning=FALSE}
+p_total = ggarrange(p_men, p_women,
+                    labels = c("a)", "b)"),
+                    hjust = -0.8,
+                    vjust = 3,
+                    ncol = 1,
+                    common.legend = FALSE,
+                    legend = "none",
+                    font.label = list(size = 10),
+                    align = "hv")
+ggsave("Document/Figures/Trend.png",
+       width = 30, height = 35, units = "cm")
+```
+
+```{r}
+# save as tikz files
+tikz(file = "Document/Figures/Trend_men.tex",
+     width = 6.5,
+     height = 6.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+p_men
+
+dev.off()
+
+tikz(file = "Document/Figures/Trend_women.tex",
+     width = 6.5,
+     height = 6.5,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+p_women
+
+dev.off()
+
+tikz(file = "Document/Figures/Trend.tex",
+     width = 6.5,
+     height = 8,
+     standAlone = FALSE,
+     onefile = FALSE,
+     engine = "pdftex",
+     sanitize = TRUE)
+
+p_total
+
+dev.off()
+```
